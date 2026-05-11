@@ -1,8 +1,8 @@
-# anon0mesh
+# anonmesh
 
 **Mesh First, Chain When It Matters.**
 
-anon0mesh is a Python MVP for tunneling Solana JSON-RPC requests over [Reticulum's](https://reticulum.network/) end-to-end encrypted mesh network. Off-grid devices interact with the Solana blockchain through connected gateway nodes ("Beacons") over virtually any transport medium — LoRa, BLE, WiFi, Packet Radio, TCP hubs, and more.
+anonmesh is a Python MVP for tunneling Solana JSON-RPC requests over [Reticulum's](https://reticulum.network/) end-to-end encrypted mesh network. Off-grid devices interact with the Solana blockchain through connected gateway nodes ("Beacons") over virtually any transport medium — LoRa, BLE, WiFi, Packet Radio, TCP hubs, and more.
 
 After relaying a transaction, the Beacon co-signs and submits an `execute_payment` instruction to the **ble_revshare** Anchor program, logging encrypted payment statistics via [Arcium MPC](https://arcium.com/) — so revenue-share accounting happens on-chain without leaking raw amounts.
 
@@ -30,8 +30,8 @@ After relaying a transaction, the Beacon co-signs and submits an `execute_paymen
 ## Quickstart
 
 ```bash
-git clone https://github.com/Magicred-1/anon0mesh_cli.git
-cd anon0mesh_cli
+git clone https://github.com/Magicred-1/anonmesh_cli.git
+cd anonmesh_cli
 npm install
 chmod +x setup.sh
 ./setup.sh
@@ -192,7 +192,7 @@ The client partially signs the transaction (payer slot); the beacon co-signs (br
 ```bash
 ./setup.sh --beacon --systemd
 
-sudo systemctl start anon0mesh-beacon
-sudo systemctl status anon0mesh-beacon
-journalctl -u anon0mesh-beacon -f
+sudo systemctl start anonmesh-beacon
+sudo systemctl status anonmesh-beacon
+journalctl -u anonmesh-beacon -f
 ```
