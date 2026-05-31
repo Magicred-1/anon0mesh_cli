@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import * as anchor from "@coral-xyz/anchor";
 import { PublicKey, Keypair, Transaction, TransactionInstruction, SystemProgram } from "@solana/web3.js";
-import { readFileSync } from "node:fs";
+import { chmodSync, readFileSync } from "node:fs";
 
 const PROGRAM_ID = new PublicKey("7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks");
 const ARCIUM_PROGRAM_ID = new PublicKey("Arcj82pX7HxYKLR92qvgZUAd7vGS1k4hQvAFcPATFdEQ");
@@ -13,6 +13,7 @@ if (!keyPath) {
   process.exit(1);
 }
 
+chmodSync(keyPath, 0o600);
 const secret = Uint8Array.from(JSON.parse(readFileSync(keyPath, "utf8")));
 const wallet = new anchor.Wallet(Keypair.fromSecretKey(secret));
 const rpcUrl = process.env.ARCIUM_RPC_URL || "https://api.devnet.solana.com";

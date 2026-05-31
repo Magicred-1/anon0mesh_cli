@@ -5,22 +5,26 @@
  */
 
 import { Connection, PublicKey } from "@solana/web3.js";
-import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
+const envPath = join(__dir, "..", ".env");
 
 try {
-    const envLines = readFileSync(join(__dir, "..", ".env"), "utf8").split("\n");
+    chmodSync(envPath, 0o600);
+    const envLines = readFileSync(envPath, "utf8").split("\n");
     for (const line of envLines) {
         const t = line.trim();
         if (!t || t.startsWith("#") || !t.includes("=")) continue;
         const [k, ...rest] = t.split("=");
         if (!process.env[k.trim()]) process.env[k.trim()] = rest.join("=").trim();
     }
-} catch { /* no .env */ }
+} catch (err) {
+    if (err?.code !== "ENOENT") throw err;
+}
 
 const PROGRAM_ID  = "7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks";
 // Derived: find_program_address([b"ArciumSignerAccount"], MXE_PROGRAM)
@@ -49,8 +53,9 @@ const mintPubkey  = new PublicKey(MINT);
 
 // Get Arcium account addresses from shim
 const shimOut = JSON.parse(
-    execSync(`node ${join(__dir, "..", "rescue_shim.mjs")} arcium_accounts ${PROGRAM_ID}`,
-             { encoding: "utf8" })
+    execFileSync(process.execPath, [join(__dir, "..", "rescue_shim.mjs"),
+                                   "arcium_accounts", PROGRAM_ID],
+                 { encoding: "utf8" })
 );
 
 // Derive whitelist PDA
