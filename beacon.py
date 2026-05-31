@@ -389,8 +389,8 @@ def forward_plain_rpc(req: dict, req_id: int, count: int, method: str) -> bytes:
 def forward_to_solana(raw_request: bytes) -> bytes:
     """
     Route an incoming JSON-RPC request:
-      - Encrypted getBalance  → Arcium MPC (confidential, beacon never sees address/balance)
-      - Everything else       → plain Solana RPC
+      - Co-sign protocol methods → locally validated beacon handlers
+      - Everything else          → plain Solana RPC
     """
     global request_count
 
@@ -528,14 +528,14 @@ def _test_arcium() -> None:
     except Exception as exc:
         log_warn(f"Layer 0 ✘  rescue_shim.mjs: {exc}")
         log_warn("  Fix: npm install @arcium-hq/client  (in project dir)")
-        log_warn("  Arcium confidential RPC disabled")
+        log_warn("  Arcium payment-stat logging disabled")
         arcium = None
         print()
         return
 
     # ── Layer 1: ArciumBeacon from env ────────────────────────────────────────
     if os.getenv("ARCIUM_ENABLED", "0") != "1":
-        log_info("Layer 1 –  ARCIUM_ENABLED not set — confidential RPC disabled")
+        log_info("Layer 1 –  ARCIUM_ENABLED not set — payment-stat logging disabled")
         log_info("  To enable: add ARCIUM_ENABLED=1 to your .env file")
         arcium = None
         print()
@@ -705,7 +705,7 @@ def setup_beacon(config_path: str | None, network: str, custom_rpc: str | None, 
     if HAS_ARCIUM_MODULE:
         _test_arcium()
     else:
-        log_warn("arcium_client.py not found — confidential RPC disabled")
+        log_warn("arcium_client.py not found — Arcium payment-stat logging disabled")
 
     # ── Start re-announce thread ───────────────────────────────────────────────
     t = threading.Thread(target=announce_loop, args=(announce_interval,), daemon=True)

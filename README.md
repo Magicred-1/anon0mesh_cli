@@ -135,6 +135,10 @@ npm test -- -q
 
 ## Arcium MPC — execute_payment flow
 
+The current Arcium integration records encrypted payment statistics only.
+Confidential SOL balance queries are not implemented. The retained client
+`--cbalance` compatibility flag fails closed without relaying an address.
+
 After the beacon relays a `sendTransaction` containing Arcium metadata, it:
 
 1. Calls `rescue_shim.mjs get_arcium_accounts` to derive all on-chain PDA addresses.

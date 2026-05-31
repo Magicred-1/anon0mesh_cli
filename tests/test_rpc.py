@@ -94,108 +94,15 @@ def test_get_balance_malformed_result(mock_pool, capsys):
 
 # ── confidential_get_balance ──────────────────────────────────────────────────
 
-_VALID_ADDRESS = "11111111111111111111111111111111"
-_MXE_PUBKEY = "00" * 32
-
-
-def test_confidential_balance_never_plain_falls_back_without_arcium(monkeypatch, capsys):
+def test_confidential_balance_fails_closed_without_relaying_address(monkeypatch, mock_pool, capsys):
     plain_balance = MagicMock()
-    monkeypatch.setattr(rpc, "HAS_ARCIUM", False)
     monkeypatch.setattr(rpc, "get_balance", plain_balance)
 
-    rpc.confidential_get_balance(_VALID_ADDRESS)
-
-    plain_balance.assert_not_called()
-    assert "address disclosure" in capsys.readouterr().out
-
-
-def test_confidential_balance_never_plain_falls_back_without_mxe_key(monkeypatch, capsys):
-    plain_balance = MagicMock()
-    monkeypatch.setattr(rpc, "HAS_ARCIUM", True)
-    monkeypatch.delenv("ARCIUM_MXE_PUBKEY_HEX", raising=False)
-    monkeypatch.setattr(rpc, "get_balance", plain_balance)
-
-    rpc.confidential_get_balance(_VALID_ADDRESS)
-
-    plain_balance.assert_not_called()
-    assert "address disclosure" in capsys.readouterr().out
-
-
-def test_confidential_balance_rejects_invalid_encryption_payload(monkeypatch, mock_pool, capsys):
-    monkeypatch.setattr(rpc, "HAS_ARCIUM", True)
-    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", _MXE_PUBKEY)
-    monkeypatch.setattr(rpc, "rescue_encrypt", lambda *_: {})
-
-    rpc.confidential_get_balance(_VALID_ADDRESS)
+    rpc.confidential_get_balance("private-address")
 
     mock_pool.call.assert_not_called()
-    assert "Invalid Arcium encryption payload" in capsys.readouterr().out
-
-
-def test_confidential_balance_rejects_invalid_result_shape(monkeypatch, mock_pool, capsys):
-    monkeypatch.setattr(rpc, "HAS_ARCIUM", True)
-    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", _MXE_PUBKEY)
-    monkeypatch.setattr(rpc, "rescue_encrypt", lambda *_: {
-        "ciphertexts": [[0] * 32],
-        "pubkey_hex": "00" * 32,
-        "nonce_bn": "0",
-    })
-    mock_pool.call.return_value = {"result": "not-an-object"}
-
-    rpc.confidential_get_balance(_VALID_ADDRESS)
-
-    assert "Invalid Arcium result: expected object" in capsys.readouterr().out
-
-
-def test_confidential_balance_never_plain_falls_back_after_decrypt_error(monkeypatch, mock_pool, capsys):
-    plain_balance = MagicMock()
-    monkeypatch.setattr(rpc, "HAS_ARCIUM", True)
-    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", _MXE_PUBKEY)
-    monkeypatch.setattr(rpc, "get_balance", plain_balance)
-    monkeypatch.setattr(rpc, "rescue_encrypt", lambda *_: {
-        "ciphertexts": [[0] * 32],
-        "pubkey_hex": "00" * 32,
-        "nonce_bn": "0",
-        "shared_secret_hex": "00" * 32,
-    })
-    monkeypatch.setattr(rpc, "rescue_shared_secret", MagicMock(side_effect=ValueError("bad response")))
-    mock_pool.call.return_value = {
-        "result": {
-            "mxe_pubkey_hex": "00" * 32,
-            "enc_balance": [0] * 32,
-            "nonce_hex": "00" * 16,
-        }
-    }
-
-    rpc.confidential_get_balance(_VALID_ADDRESS)
-
     plain_balance.assert_not_called()
-    assert "Plain fallback disabled to protect address privacy" in capsys.readouterr().out
-
-
-@pytest.mark.parametrize("decrypted_value", [True, -1, 1 << 64, "1"])
-def test_confidential_balance_rejects_non_u64_decrypted_value(monkeypatch, mock_pool, capsys, decrypted_value):
-    monkeypatch.setattr(rpc, "HAS_ARCIUM", True)
-    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", _MXE_PUBKEY)
-    monkeypatch.setattr(rpc, "rescue_encrypt", lambda *_: {
-        "ciphertexts": [[0] * 32],
-        "pubkey_hex": "00" * 32,
-        "nonce_bn": "0",
-        "shared_secret_hex": "00" * 32,
-    })
-    monkeypatch.setattr(rpc, "rescue_shared_secret", lambda *_: "secret")
-    monkeypatch.setattr(rpc, "rescue_decrypt", lambda *_: [decrypted_value])
-    mock_pool.call.return_value = {
-        "result": {
-            "mxe_pubkey_hex": "00" * 32,
-            "enc_balance": [0] * 32,
-            "nonce_hex": "00" * 16,
-        }
-    }
-
-    rpc.confidential_get_balance(_VALID_ADDRESS)
-
-    assert "decrypted balance must be a u64 integer" in capsys.readouterr().out
+    assert "no MPC query handler is implemented" in capsys.readouterr().out
 
 
 # ── get_slot ───────────────────────────────────────────────────────────────────

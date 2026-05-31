@@ -22,7 +22,7 @@ from shared import (
 )
 from rpc import (
     rpc_call,
-    get_balance, confidential_get_balance,
+    get_balance,
     get_slot, get_block_height, get_transaction_count, get_recent_blockhash,
     get_token_accounts, send_transaction, simulate_transaction,
     get_nonce_account, get_beacon_pubkey, cosign_and_send,
@@ -245,14 +245,6 @@ def _do_balance():
         addr = state.active_wallet["pubkey"]
     if addr:
         get_balance(addr)
-
-
-def _do_cbalance():
-    addr = _ask("Wallet address (blank = active wallet)")
-    if not addr and state.active_wallet:
-        addr = state.active_wallet["pubkey"]
-    if addr:
-        confidential_get_balance(addr)
 
 
 def _do_tokens():
@@ -524,7 +516,6 @@ MENU: list[dict] = [
     {"section": _SEC_WALLET,  "label": "Import private key",                   "fn": _do_import_wallet},
     {"section": _SEC_WALLET,  "label": "Copy public key",                      "fn": _do_copy_pubkey},
     {"section": _SEC_WALLET,  "label": "SOL balance",                          "fn": _do_balance},
-    {"section": _SEC_WALLET,  "label": "SOL balance  (confidential · Arcium)", "fn": _do_cbalance},
     {"section": _SEC_WALLET,  "label": "SPL token accounts",                   "fn": _do_tokens},
     {"section": _SEC_SEND,    "label": "Send SOL",                             "fn": _do_send_sol},
     {"section": _SEC_SEND,    "label": "Arcium payment  (beacon co-sign)",     "fn": _do_arcium_transfer},

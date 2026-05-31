@@ -6,7 +6,6 @@ All functions that query or relay to the Solana network via the beacon pool.
 No local signing happens here — see wallet.py for that.
 """
 
-import os
 import json
 import concurrent.futures
 
@@ -16,15 +15,7 @@ from shared import (
     BOLD, CYAN, GREEN, RED, RESET, DIM,
 )
 
-# ── Optional Arcium confidential-query support ─────────────────────────────────
-try:
-    from arcium_client import rescue_encrypt, rescue_decrypt, rescue_shared_secret
-    HAS_ARCIUM = True
-except ImportError:
-    HAS_ARCIUM = False
-
 _NO_BEACON_RESP = "No response from beacon"
-_MAX_U64 = (1 << 64) - 1
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -72,87 +63,10 @@ def get_balance(address):
     print(f"  Balance: {BOLD}{sol:.9f} SOL{RESET}  ({lamports:,} lamports)\n")
 
 
-def confidential_get_balance(address: str) -> None:
-    """
-    Fetch SOL balance via Arcium MPC — the beacon never sees the address or balance.
-    Requires ARCIUM_MXE_PUBKEY_HEX in .env and arcium_client.py present.
-    Never falls back automatically: a plain query would disclose the address.
-    """
-    if not HAS_ARCIUM:
-        log_warn("arcium_client.py not found — confidential balance unavailable")
-        log_warn("Use the plain balance command explicitly only if address disclosure is acceptable")
-        return
-
-    mxe_pubkey_hex = os.getenv("ARCIUM_MXE_PUBKEY_HEX", "").strip()
-    if not mxe_pubkey_hex:
-        log_warn("ARCIUM_MXE_PUBKEY_HEX not set — confidential balance unavailable")
-        log_warn("Use the plain balance command explicitly only if address disclosure is acceptable")
-        return
-
-    try:
-        from solders.pubkey import Pubkey as _Pubkey
-        address_bytes = list(bytes(_Pubkey.from_string(address)))
-    except Exception as exc:
-        log_err(f"Invalid address: {exc}")
-        return
-
-    log_info("Encrypting address for Arcium MPC...")
-    try:
-        enc = rescue_encrypt(mxe_pubkey_hex, address_bytes)
-    except Exception as exc:
-        log_err(f"Encryption failed: {exc}")
-        return
-
-    try:
-        encrypted_address = enc["ciphertexts"][0]
-        ephemeral_pubkey = enc["pubkey_hex"]
-        nonce = int(enc["nonce_bn"])
-    except (KeyError, IndexError, TypeError, ValueError):
-        log_err("Invalid Arcium encryption payload")
-        return
-
-    resp = rpc_call("getBalance", [{
-        "enc_address":   encrypted_address,
-        "ephem_pub":     ephemeral_pubkey,
-        "nonce":         nonce,
-        "comp_def_name": "payment_stats",
-    }])
-
-    if resp is None:
-        return
-    if not isinstance(resp, dict):
-        log_err("Invalid Arcium response: expected object")
-        return
-    if resp.get("status") == "error":
-        log_err(f"Arcium error: {resp.get('message', '?')}")
-        return
-
-    r = resp.get("result", resp)
-    if not isinstance(r, dict):
-        log_err("Invalid Arcium result: expected object")
-        return
-    if r.get("status") == "error":
-        log_err(f"Arcium error: {r.get('message', '?')}")
-        return
-
-    try:
-        shared_secret = rescue_shared_secret(
-            enc.get("shared_secret_hex") or enc.get("privkey_hex", ""),
-            r.get("mxe_pubkey_hex", ""),
-        )
-        values   = rescue_decrypt(shared_secret, [r["enc_balance"]], r["nonce_hex"])
-        lamports = values[0]
-        if isinstance(lamports, bool) or not isinstance(lamports, int) or not 0 <= lamports <= _MAX_U64:
-            raise ValueError("decrypted balance must be a u64 integer")
-        sol      = lamports / 1_000_000_000
-        print()
-        print(f"  {GREEN}{BOLD}{address}{RESET}  {DIM}(confidential via Arcium MPC){RESET}")
-        print(f"  Balance: {BOLD}{sol:.9f} SOL{RESET}  ({lamports:,} lamports)")
-        print(f"  {DIM}Beacon never saw this address or balance{RESET}")
-        print()
-    except Exception as exc:
-        log_err(f"Decryption failed: {exc}")
-        log_warn("Plain fallback disabled to protect address privacy")
+def confidential_get_balance(_address: str) -> None:
+    """Fail closed until a real MPC balance-query handler exists."""
+    log_warn("Confidential balance is unavailable: no MPC query handler is implemented")
+    log_warn("Use the plain balance command explicitly only if address disclosure is acceptable")
 
 
 def get_slot():

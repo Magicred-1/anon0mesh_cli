@@ -76,7 +76,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-identify", action="store_true")
     parser.add_argument("--balance",     metavar="ADDRESS")
     parser.add_argument("--cbalance",    metavar="ADDRESS",
-                        help="Confidential balance via Arcium MPC")
+                        help="Unavailable compatibility flag: no MPC balance-query handler exists")
     parser.add_argument("--slot",        action="store_true")
     parser.add_argument("--blockhash",   action="store_true")
     parser.add_argument("--send-tx",     metavar="BASE64_TX")
