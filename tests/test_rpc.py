@@ -173,6 +173,31 @@ def test_confidential_balance_never_plain_falls_back_after_decrypt_error(monkeyp
     assert "Plain fallback disabled to protect address privacy" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("decrypted_value", [True, -1, 1 << 64, "1"])
+def test_confidential_balance_rejects_non_u64_decrypted_value(monkeypatch, mock_pool, capsys, decrypted_value):
+    monkeypatch.setattr(rpc, "HAS_ARCIUM", True)
+    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", _MXE_PUBKEY)
+    monkeypatch.setattr(rpc, "rescue_encrypt", lambda *_: {
+        "ciphertexts": [[0] * 32],
+        "pubkey_hex": "00" * 32,
+        "nonce_bn": "0",
+        "shared_secret_hex": "00" * 32,
+    })
+    monkeypatch.setattr(rpc, "rescue_shared_secret", lambda *_: "secret")
+    monkeypatch.setattr(rpc, "rescue_decrypt", lambda *_: [decrypted_value])
+    mock_pool.call.return_value = {
+        "result": {
+            "mxe_pubkey_hex": "00" * 32,
+            "enc_balance": [0] * 32,
+            "nonce_hex": "00" * 16,
+        }
+    }
+
+    rpc.confidential_get_balance(_VALID_ADDRESS)
+
+    assert "decrypted balance must be a u64 integer" in capsys.readouterr().out
+
+
 # ── get_slot ───────────────────────────────────────────────────────────────────
 
 def test_get_slot_ok(mock_pool, capsys):
@@ -259,6 +284,12 @@ def test_get_recent_blockhash_error(mock_pool):
     assert rpc.get_recent_blockhash() is None
 
 
+def test_get_recent_blockhash_rejects_non_string(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": {"value": {"blockhash": ["not", "a", "string"]}}}
+    assert rpc.get_recent_blockhash() is None
+    assert "Unexpected response" in capsys.readouterr().out
+
+
 # ── wallet detail formatting ──────────────────────────────────────────────────
 
 def test_print_sol_balance_malformed_result(capsys):
@@ -269,6 +300,17 @@ def test_print_sol_balance_malformed_result(capsys):
 def test_print_spl_tokens_malformed_result(capsys):
     rpc._print_spl_tokens({"result": {"value": "not-a-list"}})
     assert "Unexpected getTokenAccountsByOwner response" in capsys.readouterr().out
+
+
+def test_print_spl_tokens_malformed_nested_account(capsys):
+    rpc._print_spl_tokens({"result": {"value": [{"account": {"data": {"parsed": {"info": []}}}}]}})
+    assert "could not parse account" in capsys.readouterr().out
+
+
+def test_get_token_accounts_handles_query_exception(mock_pool, capsys):
+    mock_pool.call.side_effect = RuntimeError("query failed")
+    rpc.get_token_accounts("owner")
+    assert "Wallet detail query failed" in capsys.readouterr().out
 
 
 # ── get_beacon_pubkey ─────────────────────────────────────────────────────────
@@ -295,6 +337,12 @@ def test_get_beacon_pubkey_scalar_error(mock_pool, capsys):
     assert "busy" in capsys.readouterr().out
 
 
+def test_get_beacon_pubkey_rejects_non_string(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": {"not": "a pubkey"}}
+    assert rpc.get_beacon_pubkey() is None
+    assert "Unexpected getBeaconPubkey response" in capsys.readouterr().out
+
+
 # ── cosign_and_send ───────────────────────────────────────────────────────────
 
 def test_cosign_and_send_success(mock_pool, capsys):
@@ -319,6 +367,12 @@ def test_cosign_and_send_scalar_error(mock_pool, capsys):
 def test_cosign_and_send_none_response(mock_pool):
     mock_pool.call.return_value = None
     assert rpc.cosign_and_send("tx_b64") is None
+
+
+def test_cosign_and_send_rejects_non_string_signature(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": {"not": "a signature"}}
+    assert rpc.cosign_and_send("tx_b64") is None
+    assert "Unexpected cosignTransaction response" in capsys.readouterr().out
 
 
 def test_cosign_and_send_arcium_meta_forwarded(mock_pool):
@@ -361,6 +415,12 @@ def test_send_transaction_none(mock_pool, capsys):
     capsys.readouterr()
 
 
+def test_send_transaction_rejects_non_string_signature(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": ["not", "a signature"]}
+    rpc.send_transaction("b64tx")
+    assert "Unexpected sendTransaction response" in capsys.readouterr().out
+
+
 # ── simulate_transaction ──────────────────────────────────────────────────────
 
 def test_simulate_transaction_success(mock_pool, capsys):
@@ -387,6 +447,18 @@ def test_simulate_transaction_malformed_result(mock_pool, capsys):
 
 def test_simulate_transaction_malformed_logs(mock_pool, capsys):
     mock_pool.call.return_value = {"result": {"value": {"err": None, "logs": "not-a-list"}}}
+    rpc.simulate_transaction("b64tx")
+    assert "Unexpected simulateTransaction logs" in capsys.readouterr().out
+
+
+def test_simulate_transaction_rpc_error(mock_pool, capsys):
+    mock_pool.call.return_value = {"error": "busy"}
+    rpc.simulate_transaction("b64tx")
+    assert "Simulation rejected: busy" in capsys.readouterr().out
+
+
+def test_simulate_transaction_rejects_non_string_log(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": {"value": {"err": None, "logs": [{"bad": "log"}]}}}
     rpc.simulate_transaction("b64tx")
     assert "Unexpected simulateTransaction logs" in capsys.readouterr().out
 
@@ -440,3 +512,24 @@ def test_get_nonce_account_none_response(mock_pool, capsys):
 def test_get_nonce_account_rpc_error(mock_pool, capsys):
     mock_pool.call.return_value = {"error": "connection refused"}
     assert rpc.get_nonce_account("NONCE_PUBKEY") is None
+
+
+def test_get_nonce_account_rejects_non_string_fields(mock_pool, capsys):
+    mock_pool.call.return_value = {
+        "result": {"value": {"data": {"parsed": {
+            "type": "initialized",
+            "info": {"blockhash": ["not", "a", "string"], "authority": "AUTHORITY"},
+        }}}}
+    }
+    assert rpc.get_nonce_account("NONCE_PUBKEY") is None
+    assert "nonce blockhash and authority must be strings" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("parsed, error", [
+    ([], "parsed nonce data must be an object"),
+    ({"type": "initialized", "info": []}, "nonce info must be an object"),
+])
+def test_get_nonce_account_rejects_non_object_fields(mock_pool, capsys, parsed, error):
+    mock_pool.call.return_value = {"result": {"value": {"data": {"parsed": parsed}}}}
+    assert rpc.get_nonce_account("NONCE_PUBKEY") is None
+    assert error in capsys.readouterr().out

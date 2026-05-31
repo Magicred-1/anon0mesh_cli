@@ -24,6 +24,7 @@ except ImportError:
     HAS_ARCIUM = False
 
 _NO_BEACON_RESP = "No response from beacon"
+_MAX_U64 = (1 << 64) - 1
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -45,6 +46,10 @@ def _extract_result(resp: dict):
     if isinstance(r, dict) and "value" in r:
         return r["value"]
     return r
+
+
+def _is_nonempty_string(value) -> bool:
+    return isinstance(value, str) and bool(value)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -137,6 +142,8 @@ def confidential_get_balance(address: str) -> None:
         )
         values   = rescue_decrypt(shared_secret, [r["enc_balance"]], r["nonce_hex"])
         lamports = values[0]
+        if isinstance(lamports, bool) or not isinstance(lamports, int) or not 0 <= lamports <= _MAX_U64:
+            raise ValueError("decrypted balance must be a u64 integer")
         sol      = lamports / 1_000_000_000
         print()
         print(f"  {GREEN}{BOLD}{address}{RESET}  {DIM}(confidential via Arcium MPC){RESET}")
@@ -197,7 +204,7 @@ def get_recent_blockhash() -> str | None:
     if isinstance(r, dict):
         val = r.get("value", r)
         bh  = val.get("blockhash") if isinstance(val, dict) else None
-        if bh:
+        if _is_nonempty_string(bh):
             print(f"\n  Latest blockhash: {BOLD}{bh}{RESET}\n")
             return bh
     log_warn(f"Unexpected response: {json.dumps(resp)}")
@@ -231,9 +238,16 @@ def _print_spl_tokens(token_resp: dict | None) -> None:
     for acc in accounts:
         try:
             info     = acc["account"]["data"]["parsed"]["info"]
-            mint     = info.get("mint", "?")
-            decimals = info.get("tokenAmount", {}).get("decimals", 0)
-            amount   = info.get("tokenAmount", {}).get("uiAmountString", "?")
+            token_amount = info["tokenAmount"]
+            mint     = info["mint"]
+            decimals = token_amount["decimals"]
+            amount   = token_amount["uiAmountString"]
+            if (
+                not isinstance(mint, str)
+                or isinstance(decimals, bool) or not isinstance(decimals, int)
+                or not isinstance(amount, str)
+            ):
+                raise TypeError("unexpected token account field type")
             symbol   = f"  {DIM}({decimals} decimals){RESET}" if decimals else ""
             print(f"  {DIM}·{RESET} {mint}  {BOLD}{amount}{RESET}{symbol}")
         except (KeyError, TypeError):
@@ -248,8 +262,12 @@ def get_token_accounts(owner):
             {"programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"},
             {"encoding": "jsonParsed"},
         ])
-        sol_resp   = fut_sol.result()
-        token_resp = fut_tokens.result()
+        try:
+            sol_resp   = fut_sol.result()
+            token_resp = fut_tokens.result()
+        except Exception as exc:
+            log_err(f"Wallet detail query failed: {exc}")
+            return
 
     print(f"\n  {GREEN}{BOLD}{owner}{RESET}")
     _print_sol_balance(sol_resp)
@@ -269,7 +287,11 @@ def get_beacon_pubkey() -> str | None:
     if "error" in resp:
         log_err(f"getBeaconPubkey: {rpc_error_message(resp['error'])}")
         return None
-    return _extract_result(resp)
+    pubkey = _extract_result(resp)
+    if not _is_nonempty_string(pubkey):
+        log_warn(f"Unexpected getBeaconPubkey response: {json.dumps(resp)}")
+        return None
+    return pubkey
 
 
 def cosign_and_send(partial_tx_b64: str, arcium_meta: dict | None = None) -> str | None:
@@ -289,9 +311,11 @@ def cosign_and_send(partial_tx_b64: str, arcium_meta: dict | None = None) -> str
         log_err(f"Co-sign rejected: {rpc_error_message(resp['error'])}")
         return None
     sig = _extract_result(resp)
-    if sig:
-        log_ok("Co-signed transaction relayed via beacon!")
-        print(f"\n  Signature: {BOLD}{GREEN}{sig}{RESET}\n")
+    if not _is_nonempty_string(sig):
+        log_warn(f"Unexpected cosignTransaction response: {json.dumps(resp)}")
+        return None
+    log_ok("Co-signed transaction relayed via beacon!")
+    print(f"\n  Signature: {BOLD}{GREEN}{sig}{RESET}\n")
     return sig
 
 
@@ -306,28 +330,36 @@ def send_transaction(signed_tx_b64):
     if "error" in resp:
         log_err(f"Transaction rejected: {rpc_error_message(resp['error'])}")
         return
+    signature = resp.get("result")
+    if not _is_nonempty_string(signature):
+        log_warn(f"Unexpected sendTransaction response: {json.dumps(resp)}")
+        return
     log_ok("Transaction relayed via mesh!")
-    print(f"\n  Signature: {BOLD}{GREEN}{resp.get('result', '?')}{RESET}\n")
+    print(f"\n  Signature: {BOLD}{GREEN}{signature}{RESET}\n")
 
 
 def simulate_transaction(signed_tx_b64):
     resp = rpc_call("simulateTransaction", [signed_tx_b64, {"encoding": "base64"}])
-    if resp and "result" in resp:
-        sim = _extract_result(resp)
-        if not isinstance(sim, dict):
-            log_warn(f"Unexpected simulateTransaction response: {json.dumps(resp)}")
-            return
-        if sim.get("err"):
-            log_warn(f"Simulation error: {sim['err']}")
-        else:
-            log_ok("Simulation successful")
-        logs = sim.get("logs") or []
-        if not isinstance(logs, list):
-            log_warn(f"Unexpected simulateTransaction logs: {json.dumps(logs)}")
-            return
-        for line in logs:
-            print(f"  {DIM}{line}{RESET}")
-        print()
+    if resp is None:
+        return
+    if "error" in resp:
+        log_err(f"Simulation rejected: {rpc_error_message(resp['error'])}")
+        return
+    sim = _extract_result(resp)
+    if not isinstance(sim, dict):
+        log_warn(f"Unexpected simulateTransaction response: {json.dumps(resp)}")
+        return
+    if sim.get("err"):
+        log_warn(f"Simulation error: {sim['err']}")
+    else:
+        log_ok("Simulation successful")
+    logs = sim.get("logs") or []
+    if not isinstance(logs, list) or any(not isinstance(line, str) for line in logs):
+        log_warn(f"Unexpected simulateTransaction logs: {json.dumps(logs)}")
+        return
+    for line in logs:
+        print(f"  {DIM}{line}{RESET}")
+    print()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -355,12 +387,18 @@ def get_nonce_account(nonce_pubkey_str: str) -> dict | None:
 
     try:
         parsed    = account["data"]["parsed"]
+        if not isinstance(parsed, dict):
+            raise TypeError("parsed nonce data must be an object")
         if parsed.get("type") != "initialized":
             log_err(f"Nonce account is not initialized (type={parsed.get('type')!r})")
             return None
         info      = parsed["info"]
+        if not isinstance(info, dict):
+            raise TypeError("nonce info must be an object")
         nonce_val = info["blockhash"]
         authority = info["authority"]
+        if not _is_nonempty_string(nonce_val) or not _is_nonempty_string(authority):
+            raise TypeError("nonce blockhash and authority must be strings")
     except (KeyError, TypeError) as exc:
         log_err(f"Could not parse nonce account data: {exc}")
         log_warn('Confirm this is a nonce account: raw getAccountInfo ["<pubkey>",{"encoding":"jsonParsed"}]')
