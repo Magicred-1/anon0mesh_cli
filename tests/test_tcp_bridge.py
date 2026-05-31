@@ -148,13 +148,13 @@ def main():
     # announce, establishes a link through the TCP bridge, and sends an RPC request.
     client_code = f'''
 import sys, os, time, json
-sys.path.insert(0, "{os.path.realpath(PROJECT_ROOT)}")
+sys.path.insert(0, {os.path.realpath(PROJECT_ROOT)!r})
 import RNS
 from shared import APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA, build_rpc, decompress_response
 
 try:
     # Connect to relay instance
-    r = RNS.Reticulum("{RELAY_CONFIG}")
+    r = RNS.Reticulum({RELAY_CONFIG!r})
     time.sleep(2)
 
     print("CLIENT: Reticulum connected to relay instance")
