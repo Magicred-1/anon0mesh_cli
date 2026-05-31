@@ -66,6 +66,7 @@ CLUSTER_OFFSET_MAINNET = 2026
 POLL_INTERVAL          = 2.0
 POLL_TIMEOUT           = 120.0
 SHIM_PATH              = Path(__file__).parent / "rescue_shim.mjs"
+_MAX_U32               = (1 << 32) - 1
 
 
 # ── Shim helpers ───────────────────────────────────────────────────────────────
@@ -95,6 +96,8 @@ def _run_shim(*args: str, stdin_data: str | None = None, timeout: int = 60) -> d
     except json.JSONDecodeError:
         raw = result.stderr.strip() or result.stdout.strip()
         raise RuntimeError(f"shim non-JSON output (exit {result.returncode}): {redact_urls(raw[:300])}")
+    if not isinstance(data, dict):
+        raise RuntimeError(f"shim returned non-object JSON (exit {result.returncode})")
     if not data.get("ok"):
         error = data.get("error") or f"shim error (exit {result.returncode})"
         raise RuntimeError(redact_urls(str(error)))
@@ -103,7 +106,11 @@ def _run_shim(*args: str, stdin_data: str | None = None, timeout: int = 60) -> d
 
 def rescue_keygen() -> tuple[str, str]:
     data = _run_shim("keygen")
-    return data["privkey_hex"], data["pubkey_hex"]
+    private_key = data.get("privkey_hex")
+    public_key = data.get("pubkey_hex")
+    if not isinstance(private_key, str) or not private_key or not isinstance(public_key, str) or not public_key:
+        raise ValueError("shim keygen returned invalid keys")
+    return private_key, public_key
 
 
 def rescue_encrypt(mxe_pubkey_hex: str, values: list[int], nonce_hex: str | None = None) -> dict:
@@ -116,12 +123,18 @@ def rescue_encrypt(mxe_pubkey_hex: str, values: list[int], nonce_hex: str | None
 def rescue_decrypt(shared_secret_hex: str, ciphertexts: list[list[int]], nonce_hex: str) -> list[int]:
     # shared_secret_hex is sensitive — pass via stdin, not as a CLI arg
     data = _run_shim("decrypt", json.dumps(ciphertexts), nonce_hex, stdin_data=shared_secret_hex)
-    return [int(v) for v in data["values"]]
+    values = data.get("values")
+    if not isinstance(values, list) or any(not isinstance(value, str) or not value.isdecimal() for value in values):
+        raise ValueError("shim decrypt returned invalid values")
+    return [int(value) for value in values]
 
 
 def rescue_shared_secret(privkey_hex: str, mxe_pubkey_hex: str) -> str:
     # privkey_hex is sensitive — pass via stdin, not as a CLI arg
-    return _run_shim("shared_secret", mxe_pubkey_hex, stdin_data=privkey_hex)["shared_secret_hex"]
+    shared_secret = _run_shim("shared_secret", mxe_pubkey_hex, stdin_data=privkey_hex).get("shared_secret_hex")
+    if not isinstance(shared_secret, str) or not shared_secret:
+        raise ValueError("shim shared_secret returned an invalid key")
+    return shared_secret
 
 
 # ── ArciumBeaconClient ─────────────────────────────────────────────────────────
@@ -294,6 +307,8 @@ class ArciumBeacon:
                 payer = Keypair.from_bytes(bytes(json.load(f)))
 
             cluster_offset = int(os.getenv("ARCIUM_CLUSTER_OFFSET", str(CLUSTER_OFFSET_DEVNET)))
+            if not 0 <= cluster_offset <= _MAX_U32:
+                raise ValueError(f"ARCIUM_CLUSTER_OFFSET must be between 0 and {_MAX_U32}")
             program_id     = os.getenv("ARCIUM_MXE_PROGRAM_ID", MXE_PROGRAM_ID)
 
             client = ArciumBeaconClient(
@@ -306,7 +321,7 @@ class ArciumBeacon:
             log_ok(f"Arcium client ready  program={program_id[:16]}...  cluster={cluster_offset}")
             return cls(client)
 
-        except (KeyError, FileNotFoundError) as exc:
+        except Exception as exc:
             log_err(f"Arcium env error: {redact_urls(str(exc))}")
             return cls(None)
 

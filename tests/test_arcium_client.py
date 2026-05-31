@@ -62,6 +62,16 @@ def test_run_shim_non_json_stdout_raises(mock_run, tmp_path):
 
 
 @patch("subprocess.run")
+def test_run_shim_non_object_json_raises(mock_run, tmp_path):
+    shim = tmp_path / "rescue_shim.mjs"
+    shim.touch()
+    with patch.object(arcium_client, "SHIM_PATH", shim):
+        mock_run.return_value = _proc("[]")
+        with pytest.raises(RuntimeError, match="shim returned non-object JSON"):
+            arcium_client._run_shim("broken")
+
+
+@patch("subprocess.run")
 def test_run_shim_falls_back_to_stderr_in_error_msg(mock_run, tmp_path):
     shim = tmp_path / "rescue_shim.mjs"
     shim.touch()
@@ -114,6 +124,13 @@ def test_rescue_keygen_calls_keygen(mock_shim):
     mock_shim.assert_called_once_with("keygen")
     assert priv == "aabb"
     assert pub == "ccdd"
+
+
+@patch("arcium_client._run_shim")
+def test_rescue_keygen_rejects_invalid_keys(mock_shim):
+    mock_shim.return_value = {"ok": True, "privkey_hex": [], "pubkey_hex": "ccdd"}
+    with pytest.raises(ValueError, match="invalid keys"):
+        arcium_client.rescue_keygen()
 
 
 # ── rescue_encrypt ────────────────────────────────────────────────────────────
@@ -181,6 +198,14 @@ def test_rescue_decrypt_passes_ciphertexts_and_nonce_as_args(mock_shim):
     assert args[2] == "my_nonce"
 
 
+@pytest.mark.parametrize("values", [None, "42", [True], ["-1"], [{}]])
+@patch("arcium_client._run_shim")
+def test_rescue_decrypt_rejects_invalid_values(mock_shim, values):
+    mock_shim.return_value = {"ok": True, "values": values}
+    with pytest.raises(ValueError, match="invalid values"):
+        arcium_client.rescue_decrypt("secret", [[]], "nonce")
+
+
 # ── rescue_shared_secret ──────────────────────────────────────────────────────
 
 @patch("arcium_client._run_shim")
@@ -204,6 +229,13 @@ def test_rescue_shared_secret_returns_hex(mock_shim):
     mock_shim.return_value = {"ok": True, "shared_secret_hex": "cafebabe"}
     result = arcium_client.rescue_shared_secret("priv", "pub")
     assert result == "cafebabe"
+
+
+@patch("arcium_client._run_shim")
+def test_rescue_shared_secret_rejects_invalid_key(mock_shim):
+    mock_shim.return_value = {"ok": True, "shared_secret_hex": []}
+    with pytest.raises(ValueError, match="invalid key"):
+        arcium_client.rescue_shared_secret("priv", "pub")
 
 
 @patch("arcium_client._run_shim")
@@ -279,6 +311,25 @@ def test_arcium_beacon_from_env_repairs_payer_permissions(tmp_path, monkeypatch)
 
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     keypair_type.from_bytes.assert_called_once_with(bytes([1, 2, 3]))
+
+
+@pytest.mark.parametrize("offset", ["not-an-int", "-1", str(1 << 32)])
+def test_arcium_beacon_from_env_invalid_cluster_offset_disables(tmp_path, monkeypatch, offset, capsys):
+    path = tmp_path / "payer.json"
+    path.write_text("[1, 2, 3]")
+    keypair_type = MagicMock()
+    keypair_type.from_bytes.return_value = object()
+    monkeypatch.setenv("ARCIUM_ENABLED", "1")
+    monkeypatch.setenv("ARCIUM_PAYER_KEYPAIR", str(path))
+    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", "ab")
+    monkeypatch.setenv("ARCIUM_CLUSTER_OFFSET", offset)
+    monkeypatch.setattr(arcium_client, "HAS_SOLANA", True)
+    monkeypatch.setattr(arcium_client, "Keypair", keypair_type)
+
+    beacon = arcium_client.ArciumBeacon.from_env()
+
+    assert not beacon.enabled
+    assert "Arcium env error" in capsys.readouterr().out
 
 
 # ── constants ─────────────────────────────────────────────────────────────────
