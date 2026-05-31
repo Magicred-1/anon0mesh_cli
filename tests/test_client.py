@@ -45,3 +45,13 @@ def test_relay_requested_declines_on_interrupt(monkeypatch, client_module):
 
     monkeypatch.setattr(builtins, "input", raise_interrupt)
     assert not client_module._relay_requested()
+
+
+def test_timeout_accepts_positive_integer(client_module):
+    assert client_module._build_parser().parse_args(["--timeout", "15"]).timeout == 15
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "not-a-number"])
+def test_timeout_rejects_non_positive_or_invalid_integer(client_module, value):
+    with pytest.raises(SystemExit):
+        client_module._build_parser().parse_args(["--timeout", value])

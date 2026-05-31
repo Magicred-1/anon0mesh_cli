@@ -63,6 +63,16 @@ from menu import repl, _RELAY_PROMPT
 # CLI parser
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _positive_int(raw_value: str) -> int:
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected a positive integer") from exc
+    if value <= 0:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+    return value
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="anon0mesh Client — multi-beacon Solana RPC over Reticulum mesh"
@@ -73,7 +83,7 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Auto-discover beacons via RNS announces")
     parser.add_argument("--strategy", default="race", choices=["race", "fallback"])
     parser.add_argument("--config",   "-c", default=None)
-    parser.add_argument("--timeout",  "-t", default=30, type=int)
+    parser.add_argument("--timeout",  "-t", default=30, type=_positive_int)
     parser.add_argument("--no-identify", action="store_true")
     parser.add_argument("--balance",     metavar="ADDRESS")
     parser.add_argument("--cbalance",    metavar="ADDRESS",
