@@ -12,7 +12,7 @@ SETUP = PROJECT_ROOT / "setup.sh"
 
 def _write_client_launcher(tmp_path: Path) -> Path:
     setup = SETUP.read_text()
-    marker = 'cat > "$SCRIPT_DIR/run_client.sh" << LAUNCHER\n'
+    marker = 'atomic_private_write "$SCRIPT_DIR/run_client.sh" 700 << LAUNCHER\n'
     launcher = setup.split(marker, 1)[1].split("\nLAUNCHER", 1)[0].replace(r"\$", "$")
     path = tmp_path / "run_client.sh"
     path.write_text(launcher)
@@ -20,6 +20,69 @@ def _write_client_launcher(tmp_path: Path) -> Path:
     (tmp_path / "venv" / "bin").mkdir(parents=True)
     (tmp_path / "venv" / "bin" / "activate").write_text("")
     return path
+
+
+def _setup_helpers() -> str:
+    return SETUP.read_text().split("# ── Defaults", 1)[0]
+
+
+def _run_helper(command: str, destination: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["bash", "-c", f"{_setup_helpers()}\n{command}"],
+        env={**os.environ, "DEST": str(destination)},
+        text=True,
+        capture_output=True,
+    )
+
+
+def test_atomic_private_write_refuses_symlink(tmp_path):
+    target = tmp_path / "target"
+    target.write_text("old")
+    destination = tmp_path / "output"
+    destination.symlink_to(target)
+
+    result = _run_helper("printf new | atomic_private_write \"$DEST\" 600", destination)
+
+    assert result.returncode != 0
+    assert target.read_text() == "old"
+
+
+def test_atomic_private_write_replaces_hardlink_without_modifying_sibling(tmp_path):
+    destination = tmp_path / "output"
+    destination.write_text("old")
+    sibling = tmp_path / "sibling"
+    os.link(destination, sibling)
+
+    result = _run_helper("printf new | atomic_private_write \"$DEST\" 600", destination)
+
+    assert result.returncode == 0
+    assert destination.read_text() == "new"
+    assert sibling.read_text() == "old"
+
+
+def test_atomic_private_append_replaces_hardlink_without_modifying_sibling(tmp_path):
+    destination = tmp_path / "output"
+    destination.write_text("old")
+    sibling = tmp_path / "sibling"
+    os.link(destination, sibling)
+
+    result = _run_helper("printf new | atomic_private_append \"$DEST\" 600", destination)
+
+    assert result.returncode == 0
+    assert destination.read_text() == "oldnew"
+    assert sibling.read_text() == "old"
+
+
+def test_atomic_private_append_refuses_symlink(tmp_path):
+    target = tmp_path / "target"
+    target.write_text("old")
+    destination = tmp_path / "output"
+    destination.symlink_to(target)
+
+    result = _run_helper("printf new | atomic_private_append \"$DEST\" 600", destination)
+
+    assert result.returncode != 0
+    assert target.read_text() == "old"
 
 
 def test_client_launcher_preserves_hex_looking_option_value(tmp_path):

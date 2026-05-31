@@ -43,6 +43,47 @@ ${R}${DIM}              a n o n m e s h  ·  Mesh First, Chain When It Matters${
 ${BOLD}                              Setup Script  ·  Powered by Reticulum${R}
 "; }
 
+refuse_unsafe_output_path() {
+  local destination="$1"
+  if [[ -L "$destination" || ( -e "$destination" && ! -f "$destination" ) ]]; then
+    log_err "Refusing unsafe output path: $destination"
+    return 1
+  fi
+}
+
+atomic_private_write() {
+  local destination="$1"
+  local mode="$2"
+  local directory base temp
+  refuse_unsafe_output_path "$destination"
+  directory="$(dirname "$destination")"
+  base="$(basename "$destination")"
+  temp="$(mktemp "$directory/.${base}.tmp.XXXXXX")"
+  if ! cat > "$temp" || ! chmod "$mode" "$temp" || ! mv -f "$temp" "$destination"; then
+    rm -f "$temp"
+    return 1
+  fi
+}
+
+atomic_private_append() {
+  local destination="$1"
+  local mode="$2"
+  local directory base temp
+  refuse_unsafe_output_path "$destination"
+  if [[ ! -f "$destination" ]]; then
+    log_err "Cannot append to missing file: $destination"
+    return 1
+  fi
+  directory="$(dirname "$destination")"
+  base="$(basename "$destination")"
+  temp="$(mktemp "$directory/.${base}.tmp.XXXXXX")"
+  if ! cat "$destination" > "$temp" || ! cat >> "$temp" \
+      || ! chmod "$mode" "$temp" || ! mv -f "$temp" "$destination"; then
+    rm -f "$temp"
+    return 1
+  fi
+}
+
 # ── Defaults ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/venv"
@@ -305,14 +346,15 @@ mkdir -p "$RNS_CONFIG_DIR" "$INTERFACES_DIR"
 chmod 700 "$RNS_CONFIG_DIR" "$INTERFACES_DIR"
 
 BACKUP_DONE=false
+refuse_unsafe_output_path "$RNS_CONFIG_FILE"
 if [[ -f "$RNS_CONFIG_FILE" ]]; then
   BACKUP="$RNS_CONFIG_FILE.bak.$(date +%Y%m%d_%H%M%S)"
-  cp "$RNS_CONFIG_FILE" "$BACKUP"
+  atomic_private_write "$BACKUP" 600 < "$RNS_CONFIG_FILE"
   log_info "Backed up existing config → $BACKUP"
   BACKUP_DONE=true
 fi
 
-cat > "$RNS_CONFIG_FILE" << RNSCFG
+atomic_private_write "$RNS_CONFIG_FILE" 600 << RNSCFG
 [reticulum]
   enable_transport         = True
   share_instance           = Yes
@@ -457,7 +499,7 @@ if [[ "$INSTALL_RNODE" == true ]]; then
     log_info "Configuring RNode: $RNODE_PORT @ $RNODE_REGION"
 
     # ── Append RNode interface to existing Reticulum config ───────────────
-    cat >> "$RNS_CONFIG_FILE" << RNODE
+    atomic_private_append "$RNS_CONFIG_FILE" 600 << RNODE
 
 # ── RNODE LORA (Heltec V3 / SX1262) ─────────────────────────────────────────
 # Region: ${RNODE_REGION}
@@ -515,7 +557,7 @@ fi
 log_step "Launcher scripts"
 
 if [[ "$INSTALL_BEACON" == true ]]; then
-  cat > "$SCRIPT_DIR/run_beacon.sh" << LAUNCHER
+  atomic_private_write "$SCRIPT_DIR/run_beacon.sh" 700 << LAUNCHER
 #!/usr/bin/env bash
 # anon0mesh Beacon launcher
 # Set SOLANA_RPC_URL in the environment if you need a custom RPC endpoint.
@@ -539,7 +581,7 @@ LAUNCHER
 fi
 
 if [[ "$INSTALL_CLIENT" == true ]]; then
-  cat > "$SCRIPT_DIR/run_client.sh" << LAUNCHER
+  atomic_private_write "$SCRIPT_DIR/run_client.sh" 700 << LAUNCHER
 #!/usr/bin/env bash
 # anon0mesh Client launcher
 # Pass beacon hashes as arguments, or use --discover for auto-discovery.
