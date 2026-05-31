@@ -118,6 +118,7 @@ def rpc_error_message(error: Any, default: str = "?") -> str:
 # Receivers call decompress_response() which handles both cases transparently.
 
 _COMPRESS_MAGIC = b"\x00zl"
+_MAX_DECOMPRESSED_RESPONSE_BYTES = 1024 * 1024
 
 def compress_response(data: bytes) -> bytes:
     """Compress a response payload with zlib if it saves space."""
@@ -129,7 +130,15 @@ def compress_response(data: bytes) -> bytes:
 def decompress_response(data: bytes) -> bytes:
     """Decompress a response payload. Passes through uncompressed data."""
     if data[:3] == _COMPRESS_MAGIC:
-        return zlib.decompress(data[3:])
+        decompressor = zlib.decompressobj()
+        raw = decompressor.decompress(
+            data[3:], _MAX_DECOMPRESSED_RESPONSE_BYTES + 1)
+        if len(raw) > _MAX_DECOMPRESSED_RESPONSE_BYTES or decompressor.unconsumed_tail:
+            raise ValueError("Compressed response exceeds expanded size limit")
+        raw += decompressor.flush(_MAX_DECOMPRESSED_RESPONSE_BYTES + 1 - len(raw))
+        if len(raw) > _MAX_DECOMPRESSED_RESPONSE_BYTES:
+            raise ValueError("Compressed response exceeds expanded size limit")
+        return raw
     return data
 
 

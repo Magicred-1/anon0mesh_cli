@@ -3,6 +3,10 @@ tests/test_shared.py — unit tests for shared.py
 """
 
 import json
+import zlib
+
+import pytest
+
 import shared
 
 
@@ -105,6 +109,20 @@ def test_rpc_error_message_extracts_object_message():
 
 def test_rpc_error_message_accepts_scalar_error():
     assert shared.rpc_error_message("busy") == "busy"
+
+
+# ── response compression ──────────────────────────────────────────────────────
+
+def test_compressed_response_roundtrip():
+    raw = b"repeated payload " * 100
+    assert shared.decompress_response(shared.compress_response(raw)) == raw
+
+
+def test_decompress_response_rejects_expansion_over_limit():
+    raw = b"x" * (shared._MAX_DECOMPRESSED_RESPONSE_BYTES + 1)
+    compressed = shared._COMPRESS_MAGIC + zlib.compress(raw)
+    with pytest.raises(ValueError, match="expanded size limit"):
+        shared.decompress_response(compressed)
 
 
 # ── quiet mode ─────────────────────────────────────────────────────────────────
