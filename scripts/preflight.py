@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping
 import importlib
+import json
 import os
 from pathlib import Path
 import sys
@@ -12,7 +13,10 @@ import sys
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from shared import SOLANA_ENDPOINTS, redact_url, terminal_safe_text
+from shared import ResponseSizeLimitError, SOLANA_ENDPOINTS, read_limited_http_body, redact_url, terminal_safe_text
+
+
+MAX_PREFLIGHT_RPC_RESPONSE_BYTES = 64 * 1024
 
 
 class Checks:
@@ -139,14 +143,22 @@ def check_rpc(checks: Checks, rpc_url: str) -> None:
             rpc_url,
             json={"jsonrpc": "2.0", "id": 1, "method": "getHealth"},
             timeout=8,
+            stream=True,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+            raw_body = read_limited_http_body(response, MAX_PREFLIGHT_RPC_RESPONSE_BYTES)
+        finally:
+            response.close()
+    except ResponseSizeLimitError:
+        checks.fail("Solana RPC getHealth response exceeds size limit")
+        return
     except Exception as exc:
         checks.fail(f"Solana RPC unreachable: {display_url} ({type(exc).__name__})")
         return
     try:
-        body = response.json()
-    except ValueError:
+        body = json.loads(raw_body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
         checks.fail("Solana RPC returned invalid JSON for getHealth")
         return
     if not isinstance(body, Mapping) or body.get("result") != "ok":

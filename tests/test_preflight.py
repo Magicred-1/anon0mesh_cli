@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+import json
 from unittest.mock import MagicMock, patch
 
 from RNS.vendor.configobj import ConfigObj
@@ -103,7 +104,7 @@ def test_rpc_failure_redacts_credentials(capsys):
 
 def test_rpc_rejects_non_object_health_response(capsys):
     response = MagicMock()
-    response.json.return_value = ["before\x1b[2Jafter"]
+    response.iter_content.return_value = [json.dumps(["before\x1b[2Jafter"]).encode()]
     checks = Checks()
 
     with patch("requests.post", return_value=response):
@@ -114,6 +115,22 @@ def test_rpc_rejects_non_object_health_response(capsys):
     assert "unexpected getHealth response" in output
     assert r"\x1b[2J" in output
     assert "\x1b[2J" not in output
+
+
+def test_rpc_rejects_oversized_health_response(capsys):
+    response = MagicMock()
+    response.iter_content.return_value = [
+        b"x" * (preflight.MAX_PREFLIGHT_RPC_RESPONSE_BYTES + 1),
+    ]
+    checks = Checks()
+
+    with patch("requests.post", return_value=response) as post:
+        check_rpc(checks, "https://rpc.example.test")
+
+    assert checks.failures == 1
+    assert "getHealth response exceeds size limit" in capsys.readouterr().out
+    assert post.call_args.kwargs["stream"] is True
+    response.close.assert_called_once_with()
 
 
 def test_main_custom_network_requires_rpc_url(monkeypatch, capsys):
