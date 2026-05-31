@@ -996,6 +996,41 @@ class TestStartupHelpers:
         _mock_RNS.Reticulum.assert_called_with("/fake/config")
         assert _state.client_identity is not None
 
+    def test_start_reticulum_repairs_transport_identity_after_wait(self):
+        delayed_identity = MagicMock()
+        _mock_RNS.Transport.identity = None
+        _mock_RNS.Identity.return_value = _make_mock_identity()
+
+        def establish_transport(_delay):
+            _mock_RNS.Transport.identity = delayed_identity
+
+        def assert_identity_ready(path):
+            assert _mock_RNS.Transport.identity is delayed_identity
+            assert path == "/fake/config/storage/transport_identity"
+
+        with (
+            patch.object(mesh.time, "sleep", side_effect=establish_transport),
+            patch.object(
+                mesh,
+                "restrict_private_file_permissions",
+                side_effect=assert_identity_ready,
+            ) as restrict,
+        ):
+            mesh.start_reticulum("/fake/config")
+
+        restrict.assert_called_once_with("/fake/config/storage/transport_identity")
+
+    def test_start_reticulum_warns_when_transport_identity_not_ready(self, capsys):
+        _mock_RNS.Transport.identity = None
+        _mock_RNS.Identity.return_value = _make_mock_identity()
+        with (
+            patch.object(mesh.time, "time", side_effect=[0.0, 6.0]),
+            patch.object(mesh, "restrict_private_file_permissions"),
+        ):
+            mesh.start_reticulum("/fake/config")
+
+        assert "Transport identity not ready after 5s" in capsys.readouterr().out
+
     def test_connect_all_parallel(self):
         _state.pool = BeaconPool()
         with patch.object(BeaconLink, "connect", return_value=True):

@@ -551,12 +551,15 @@ class BeaconAnnounceHandler:
 def start_reticulum(config_path) -> None:
     RNS.Reticulum(config_path)
     identity_dir = config_path or os.path.expanduser("~/.reticulum")
-    restrict_private_file_permissions(
-        os.path.join(identity_dir, "storage", "transport_identity"))
     deadline = time.time() + 5.0
     while RNS.Transport.identity is None and time.time() < deadline:
         time.sleep(0.1)
-    log_ok("Reticulum started")
+    if RNS.Transport.identity is None:
+        log_warn("Transport identity not ready after 5s — proceeding")
+    else:
+        log_ok("Reticulum started")
+    restrict_private_file_permissions(
+        os.path.join(identity_dir, "storage", "transport_identity"))
     state.client_identity = RNS.Identity()
     log_info(f"Client identity: {RNS.prettyhexrep(state.client_identity.hash)}")
 
