@@ -114,10 +114,10 @@ def rescue_keygen() -> tuple[str, str]:
 
 
 def rescue_encrypt(mxe_pubkey_hex: str, values: list[int], nonce_hex: str | None = None) -> dict:
-    args = ["encrypt", mxe_pubkey_hex, json.dumps(values)]
+    args = ["encrypt", mxe_pubkey_hex]
     if nonce_hex:
         args.append(nonce_hex)
-    return _run_shim(*args)
+    return _run_shim(*args, stdin_data=json.dumps(values))
 
 
 def rescue_decrypt(shared_secret_hex: str, ciphertexts: list[list[int]], nonce_hex: str) -> list[int]:

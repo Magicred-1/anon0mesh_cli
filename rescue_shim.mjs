@@ -68,8 +68,11 @@ try {
         out({ privkey_hex: hex(privateKey), pubkey_hex: hex(publicKey) });
 
     } else if (cmd === "encrypt") {
-        const [mxePubkeyHex, valuesJson, nonceHex] = args;
-        if (!mxePubkeyHex || !valuesJson) fail("usage: encrypt <mxe_pubkey_hex> <values_json> [nonce_hex]");
+        // Plaintext values are passed via stdin so confidential queries do not
+        // expose them through ps aux or /proc/<pid>/cmdline.
+        const valuesJson = readStdin();
+        const [mxePubkeyHex, nonceHex] = args;
+        if (!mxePubkeyHex || !valuesJson) fail("usage: encrypt <mxe_pubkey_hex> [nonce_hex]  (values_json via stdin)");
 
         const mxePublicKey = u8a(mxePubkeyHex);
         const plaintext    = JSON.parse(valuesJson).map(BigInt);

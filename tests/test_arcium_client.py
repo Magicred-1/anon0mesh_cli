@@ -136,7 +136,7 @@ def test_rescue_keygen_rejects_invalid_keys(mock_shim):
 # ── rescue_encrypt ────────────────────────────────────────────────────────────
 
 @patch("arcium_client._run_shim")
-def test_rescue_encrypt_passes_mxe_pubkey_and_values(mock_shim):
+def test_rescue_encrypt_passes_mxe_pubkey_and_values_via_stdin(mock_shim):
     mock_shim.return_value = {
         "ok": True, "ciphertexts": [[1, 2]], "pubkey_hex": "ab",
         "nonce_hex": "cd", "nonce_bn": "123", "shared_secret_hex": "ef",
@@ -145,7 +145,8 @@ def test_rescue_encrypt_passes_mxe_pubkey_and_values(mock_shim):
     args = mock_shim.call_args[0]
     assert args[0] == "encrypt"
     assert args[1] == "mxe_pubkey_hex"
-    assert json.loads(args[2]) == [999]
+    assert len(args) == 2
+    assert json.loads(mock_shim.call_args.kwargs["stdin_data"]) == [999]
 
 
 @patch("arcium_client._run_shim")
@@ -156,7 +157,8 @@ def test_rescue_encrypt_with_nonce_appends_arg(mock_shim):
     }
     arcium_client.rescue_encrypt("mxe", [1], nonce_hex="aabbcc")
     args = mock_shim.call_args[0]
-    assert "aabbcc" in args
+    assert args == ("encrypt", "mxe", "aabbcc")
+    assert json.loads(mock_shim.call_args.kwargs["stdin_data"]) == [1]
 
 
 @patch("arcium_client._run_shim")
@@ -167,7 +169,8 @@ def test_rescue_encrypt_without_nonce_omits_arg(mock_shim):
     }
     arcium_client.rescue_encrypt("mxe", [1])
     args = mock_shim.call_args[0]
-    assert len(args) == 3  # "encrypt", mxe_pubkey, values_json
+    assert args == ("encrypt", "mxe")
+    assert json.loads(mock_shim.call_args.kwargs["stdin_data"]) == [1]
 
 
 # ── rescue_decrypt ────────────────────────────────────────────────────────────
