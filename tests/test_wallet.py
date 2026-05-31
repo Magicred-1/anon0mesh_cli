@@ -292,6 +292,21 @@ def test_scan_nonce_accounts_repairs_legacy_permissions(tmp_path, monkeypatch):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_scan_nonce_accounts_caps_discovery_by_filename(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wallet, "MAX_DISCOVERED_NONCE_ACCOUNTS", 2)
+    expected = []
+    for suffix in ("a", "b", "c"):
+        kp = Keypair()
+        (tmp_path / f"nonce_{suffix}.json").write_text(json.dumps(list(bytes(kp))))
+        expected.append(str(kp.pubkey()))
+
+    result = wallet.scan_nonce_accounts()
+
+    assert [item["pubkey"] for item in result] == expected[:2]
+    assert "scanning the first filenames only" in capsys.readouterr().out
+
+
 # ── auto_load_wallet ──────────────────────────────────────────────────────────
 
 def test_auto_load_finds_wallet_json(tmp_path, monkeypatch):
@@ -360,6 +375,24 @@ def test_auto_load_nothing_found(tmp_path, monkeypatch):
     state.active_wallet = None
     wallet.auto_load_wallet()
     assert state.active_wallet is None
+
+
+def test_auto_load_wallet_caps_generated_candidates(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wallet, "MAX_AUTOLOAD_WALLET_CANDIDATES", 2)
+    load = MagicMock(side_effect=OSError("corrupt"))
+    monkeypatch.setattr(wallet, "_load_private_keypair", load)
+    for index in range(3):
+        path = tmp_path / f"wallet_{index}.json"
+        path.write_text("unused")
+        os.utime(path, (index, index))
+    state.active_wallet = None
+
+    wallet.auto_load_wallet()
+
+    assert state.active_wallet is None
+    assert load.call_count == 2
+    assert "trying the newest candidates only" in capsys.readouterr().out
 
 
 # ── offline_sign_transfer ─────────────────────────────────────────────────────

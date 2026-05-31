@@ -10,6 +10,7 @@ import os
 import json
 import base64
 import hashlib
+import heapq
 import secrets as _secrets
 import stat
 import tempfile
@@ -43,6 +44,8 @@ NONCE_ACCOUNT_LENGTH = 80
 _ERR_NONCE = "Could not fetch nonce account"
 _MAX_U32 = (1 << 32) - 1
 _MAX_U64 = (1 << 64) - 1
+MAX_DISCOVERED_NONCE_ACCOUNTS = 100
+MAX_AUTOLOAD_WALLET_CANDIDATES = 100
 
 
 def _validate_u64(value: int, label: str) -> bool:
@@ -143,15 +146,25 @@ def auto_load_wallet() -> None:
     if exact.exists():
         candidates.append(exact)
 
-    generated_candidates = []
-    for path in Path(".").glob("wallet_*.json"):
-        try:
-            generated_candidates.append((path.lstat().st_mtime, path))
-        except OSError:
-            continue
-    candidates += [
-        path for _, path in sorted(generated_candidates, key=lambda item: item[0], reverse=True)
-    ]
+    def generated_candidates():
+        for path in Path(".").glob("wallet_*.json"):
+            try:
+                yield path.lstat().st_mtime, path
+            except OSError:
+                continue
+
+    generated = heapq.nlargest(
+        MAX_AUTOLOAD_WALLET_CANDIDATES + 1,
+        generated_candidates(),
+        key=lambda item: item[0],
+    )
+    if len(generated) > MAX_AUTOLOAD_WALLET_CANDIDATES:
+        log_warn(
+            f"Found more than {MAX_AUTOLOAD_WALLET_CANDIDATES} generated wallet files; "
+            "trying the newest candidates only"
+        )
+        generated = generated[:MAX_AUTOLOAD_WALLET_CANDIDATES]
+    candidates += [path for _, path in generated]
 
     for path in candidates:
         try:
@@ -274,8 +287,18 @@ def scan_nonce_accounts() -> list[dict]:
     """
     if not HAS_SOLDERS:
         return []
+    paths = heapq.nsmallest(
+        MAX_DISCOVERED_NONCE_ACCOUNTS + 1,
+        Path(".").glob("nonce_*.json"),
+    )
+    if len(paths) > MAX_DISCOVERED_NONCE_ACCOUNTS:
+        log_warn(
+            f"Found more than {MAX_DISCOVERED_NONCE_ACCOUNTS} nonce keypair files; "
+            "scanning the first filenames only"
+        )
+        paths = paths[:MAX_DISCOVERED_NONCE_ACCOUNTS]
     result = []
-    for path in sorted(Path(".").glob("nonce_*.json")):
+    for path in paths:
         try:
             kp = _load_private_keypair(path)
             result.append({"path": str(path), "pubkey": str(kp.pubkey())})

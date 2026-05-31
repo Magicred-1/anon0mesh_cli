@@ -45,6 +45,7 @@ _NO_WALLET         = "No wallet loaded — use WALLET › Generate or Import fir
 _MAX_U32           = (1 << 32) - 1
 _MAX_U64           = (1 << 64) - 1
 _MAX_AMOUNT_TEXT_LENGTH = 512
+_MAX_NONCE_BALANCE_WORKERS = 8
 
 _W              = 56       # visible width of section fill
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -284,7 +285,9 @@ def _select_nonce_account() -> str | None:
         return _ask(_PROMPT_NONCE_ACCT) or None
 
     with _Spinner("Fetching balances…") as sp:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(found)) as ex:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(len(found), _MAX_NONCE_BALANCE_WORKERS),
+        ) as ex:
             futs = {ex.submit(_fetch_balance_sol, n["pubkey"]): n["pubkey"] for n in found}
             bals = {pk: fut.result() for fut, pk in
                     ((f, futs[f]) for f in concurrent.futures.as_completed(futs))}

@@ -1,5 +1,7 @@
 """Focused tests for interactive menu helpers."""
 
+import concurrent.futures
+
 import pytest
 
 import menu
@@ -101,6 +103,25 @@ def test_select_nonce_account_escapes_terminal_control_bytes_in_path(monkeypatch
     assert menu._select_nonce_account() == pubkey
     assert r"before\x1b[2Jafter" in labels[0]
     assert "\x1b[2J" not in labels[0]
+
+
+def test_select_nonce_account_caps_balance_lookup_workers(monkeypatch):
+    workers = []
+    original_executor = concurrent.futures.ThreadPoolExecutor
+    monkeypatch.setattr(menu, "scan_nonce_accounts", lambda: [
+        {"pubkey": f"{index:044d}", "path": f"nonce_{index}.json"}
+        for index in range(20)
+    ])
+    monkeypatch.setattr(menu, "_fetch_balance_sol", lambda *_: 1.0)
+    monkeypatch.setattr(menu, "_pick", lambda *_: 0)
+    monkeypatch.setattr(
+        concurrent.futures,
+        "ThreadPoolExecutor",
+        lambda *, max_workers: workers.append(max_workers) or original_executor(max_workers=max_workers),
+    )
+
+    assert menu._select_nonce_account() == f"{0:044d}"
+    assert workers == [menu._MAX_NONCE_BALANCE_WORKERS]
 
 
 def test_render_header_escapes_terminal_control_bytes_in_wallet_path(monkeypatch, capsys):
