@@ -142,6 +142,29 @@ def test_generate_wallet_refuses_fifo_target(tmp_path, capsys):
     assert "Failed to save" in capsys.readouterr().out
 
 
+def test_generate_wallet_replaces_hardlink_without_modifying_sibling(tmp_path):
+    sibling = tmp_path / "keep.txt"
+    sibling.write_text("keep")
+    path = tmp_path / "wallet.json"
+    os.link(sibling, path)
+
+    assert wallet.generate_wallet(str(path)) == str(path)
+
+    assert sibling.read_text() == "keep"
+    assert path.read_text() != "keep"
+    assert path.stat().st_ino != sibling.stat().st_ino
+
+
+def test_generate_wallet_cleans_up_temp_file_after_replace_failure(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "wallet.json"
+    monkeypatch.setattr(wallet.os, "replace", MagicMock(side_effect=OSError("refused")))
+
+    assert wallet.generate_wallet(str(path)) is None
+
+    assert list(tmp_path.iterdir()) == []
+    assert "Failed to save" in capsys.readouterr().out
+
+
 def test_generate_wallet_escapes_terminal_control_bytes_in_path(tmp_path, capsys):
     path = str(tmp_path / "before\x1b[2Jafter.json")
 

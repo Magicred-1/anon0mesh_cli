@@ -12,6 +12,7 @@ import base64
 import hashlib
 import secrets as _secrets
 import stat
+import tempfile
 from pathlib import Path
 
 import state
@@ -53,23 +54,42 @@ def _validate_u64(value: int, label: str) -> bool:
 
 
 def _save_private_keypair(path: str, keypair: "Keypair") -> None:
-    """Write a Solana keypair with owner-only permissions, including overwrites."""
-    flags = (
-        os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-        | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    )
-    fd = os.open(path, flags, 0o600)
+    """Atomically write a Solana keypair with owner-only permissions."""
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        destination_mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        pass
+    else:
+        if stat.S_ISLNK(destination_mode):
+            raise OSError(f"Refusing symlinked keypair path: {path}")
+        if not stat.S_ISREG(destination_mode):
             raise OSError(f"Refusing non-regular keypair path: {path}")
+
+    directory = os.path.dirname(path) or "."
+    prefix = f".{os.path.basename(path)}."
+    previous_umask = os.umask(0o077)
+    fd = -1
+    temp_path = ""
+    try:
+        fd, temp_path = tempfile.mkstemp(prefix=prefix, dir=directory)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"Refusing non-regular keypair temp path: {temp_path}")
         os.fchmod(fd, 0o600)
         file_obj = os.fdopen(fd, "w")
         fd = -1
         with file_obj as f:
             json.dump(list(bytes(keypair)), f)
+        os.replace(temp_path, path)
+        temp_path = ""
     finally:
         if fd != -1:
             os.close(fd)
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+        os.umask(previous_umask)
 
 
 def _restrict_private_keypair_permissions(fd: int, path: str | Path) -> None:
