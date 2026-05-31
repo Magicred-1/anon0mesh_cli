@@ -1,0 +1,30 @@
+name: CLI tests
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run test suite
+        run: ./scripts/test.sh -q
+      - name: Run static checks
+        run: |
+          .venv-test/bin/python -m pip check
+          python3 -m py_compile \
+            client.py shared.py rpc.py menu.py wallet.py mesh.py beacon.py \
+            arcium_client.py scripts/preflight.py scripts/exit_node.py \
+            scripts/demo_durable_nonce_relay.py tests/test_tcp_bridge.py
+          bash -n setup.sh scripts/headless-node.sh scripts/test.sh
+          for file in rescue_shim.mjs scripts/*.mjs; do
+            node --check "$file"
+          done
