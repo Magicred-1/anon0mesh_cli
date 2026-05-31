@@ -177,6 +177,11 @@ def test_decompress_response_rejects_expansion_over_limit():
         shared.decompress_response(compressed)
 
 
+def test_decompress_response_rejects_oversized_uncompressed_payload():
+    with pytest.raises(ValueError, match="Response exceeds size limit"):
+        shared.decompress_response(b"x" * (shared.MAX_MESH_RESPONSE_BYTES + 1))
+
+
 # ── quiet mode ─────────────────────────────────────────────────────────────────
 
 def test_log_info_visible_by_default(capsys):

@@ -171,6 +171,8 @@ def compress_response(data: bytes) -> bytes:
 
 def decompress_response(data: bytes) -> bytes:
     """Decompress a response payload. Passes through uncompressed data."""
+    if len(data) > MAX_MESH_RESPONSE_BYTES:
+        raise ValueError("Response exceeds size limit")
     if data[:3] == _COMPRESS_MAGIC:
         decompressor = zlib.decompressobj()
         raw = decompressor.decompress(
