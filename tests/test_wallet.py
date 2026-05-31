@@ -202,6 +202,15 @@ def test_scan_nonce_accounts_returns_path_and_pubkey(tmp_path, monkeypatch):
     assert result[0]["pubkey"] == str(kp.pubkey())
 
 
+def test_scan_nonce_accounts_repairs_legacy_permissions(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "nonce_test1234.json"
+    path.write_text(json.dumps(list(bytes(Keypair()))))
+    path.chmod(0o666)
+    wallet.scan_nonce_accounts()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 # ── auto_load_wallet ──────────────────────────────────────────────────────────
 
 def test_auto_load_finds_wallet_json(tmp_path, monkeypatch):

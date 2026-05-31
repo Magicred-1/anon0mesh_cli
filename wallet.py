@@ -220,6 +220,7 @@ def scan_nonce_accounts() -> list[dict]:
         try:
             with open(path) as f:
                 kp = Keypair.from_bytes(bytes(json.load(f)))
+            _restrict_private_keypair_permissions(path)
             result.append({"path": str(path), "pubkey": str(kp.pubkey())})
         except Exception:
             continue
