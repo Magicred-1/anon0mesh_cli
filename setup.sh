@@ -89,6 +89,7 @@ for arg in "$@"; do
     --help|-h)
       echo "Usage: $0 [--beacon] [--client] [--both] [--systemd] [--ble] [--rnode] [--meshtastic] [--mainnet|--devnet] [--wallet-setup]"
       echo "For unattended --rnode setup, set ANONMESH_RNODE_PORT and ANONMESH_RNODE_REGION=us|eu."
+      echo "--systemd requires --beacon or --both; --wallet-setup requires --client or --both."
       exit 0 ;;
     *)
       log_err "Unknown option: $arg"
@@ -143,6 +144,16 @@ if [[ "$NONINTERACTIVE" == false ]]; then
     read -rp "Set up now? [y/N]: " wallet_choice
     [[ "$wallet_choice" =~ ^[Yy]$ ]] && SETUP_WALLET=true
   fi
+fi
+
+if [[ "$INSTALL_SYSTEMD" == true && "$INSTALL_BEACON" != true ]]; then
+  log_err "--systemd requires --beacon or --both"
+  exit 1
+fi
+
+if [[ "$SETUP_WALLET" == true && "$INSTALL_CLIENT" != true ]]; then
+  log_err "--wallet-setup requires --client or --both"
+  exit 1
 fi
 
 log_ok "Configuration:"
