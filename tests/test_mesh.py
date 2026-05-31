@@ -176,6 +176,20 @@ class TestBeaconLinkLifecycle:
             bl._on_closed(mock_link)
             mock_sched.assert_called_once()
 
+    def test_on_closed_ignores_replaced_link(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        stale_link = _make_established_link(bl)
+        current_link = _make_established_link(bl)
+        stale_link.teardown_reason = "timeout"
+
+        with patch.object(bl, "_schedule_reconnect") as mock_sched:
+            bl._on_closed(stale_link)
+
+        assert bl.active is True
+        assert bl.link is current_link
+        assert bl.ready.is_set()
+        mock_sched.assert_not_called()
+
     def test_teardown_sets_removed_and_tears_down_link(self):
         bl = BeaconLink(VALID_HASH_HEX)
         mock_link = _make_established_link(bl)

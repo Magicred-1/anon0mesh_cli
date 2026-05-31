@@ -115,6 +115,8 @@ class BeaconLink:
     def _on_closed(self, link):
         reason = link.teardown_reason
         with self._lock:
+            if link is not self.link:
+                return
             self.active = False
             removed     = self._removed
         self.ready.clear()
