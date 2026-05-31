@@ -9,7 +9,7 @@ import pytest
 
 import beacon
 from scripts import exit_node
-from shared import build_rpc, decode_json
+from shared import MAX_MESH_REQUEST_BYTES, MAX_MESH_RESPONSE_BYTES, build_rpc, decode_json
 
 
 @pytest.mark.parametrize("payload", [[], "getBalance", 1, None])
@@ -30,6 +30,26 @@ def test_exit_node_rejects_non_object_json_without_forwarding(payload):
     assert method == "?"
     assert rtt_ms == 0.0
     post.assert_not_called()
+
+
+def test_beacon_rejects_oversized_mesh_request_without_forwarding():
+    with patch.object(beacon, "forward_to_solana") as forward:
+        response = decode_json(beacon.rpc_request_handler(
+            "/rpc", b"x" * (MAX_MESH_REQUEST_BYTES + 1), None, None, None, None,
+        ))
+
+    assert response["error"]["message"] == "Mesh request exceeds size limit"
+    forward.assert_not_called()
+
+
+def test_exit_node_rejects_oversized_mesh_request_without_forwarding():
+    with patch.object(exit_node, "forward_rpc") as forward:
+        response = decode_json(exit_node.rpc_request_handler(
+            "/rpc", b"x" * (MAX_MESH_REQUEST_BYTES + 1), None, None, None, None,
+        ))
+
+    assert response["error"]["message"] == "Mesh request exceeds size limit"
+    forward.assert_not_called()
 
 
 def test_beacon_rejects_non_list_cosign_params_without_forwarding(monkeypatch):
@@ -123,3 +143,24 @@ def test_exit_node_logs_scalar_rpc_error_without_traceback(capsys):
     assert decode_json(response) == {"error": "busy"}
     assert method == "getSlot"
     assert "error: busy" in capsys.readouterr().out
+
+
+def test_beacon_rejects_oversized_solana_response():
+    http_response = MagicMock()
+    http_response.content = b"x" * (MAX_MESH_RESPONSE_BYTES + 1)
+
+    with patch.object(beacon.requests, "post", return_value=http_response):
+        response = decode_json(beacon.forward_plain_rpc({}, 1, 1, "getSlot"))
+
+    assert response["error"]["message"] == "Solana RPC response exceeds mesh size limit"
+
+
+def test_exit_node_rejects_oversized_solana_response():
+    http_response = MagicMock()
+    http_response.content = b"x" * (MAX_MESH_RESPONSE_BYTES + 1)
+
+    with patch.object(exit_node.requests, "post", return_value=http_response):
+        response, method, _ = exit_node.forward_rpc(build_rpc("getSlot"))
+
+    assert decode_json(response)["error"]["message"] == "Solana RPC response exceeds mesh size limit"
+    assert method == "getSlot"

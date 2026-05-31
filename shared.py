@@ -159,7 +159,8 @@ def load_dotenv_private(path: str | os.PathLike[str]) -> None:
 # Receivers call decompress_response() which handles both cases transparently.
 
 _COMPRESS_MAGIC = b"\x00zl"
-_MAX_DECOMPRESSED_RESPONSE_BYTES = 1024 * 1024
+MAX_MESH_REQUEST_BYTES = 256 * 1024
+MAX_MESH_RESPONSE_BYTES = 1024 * 1024
 
 def compress_response(data: bytes) -> bytes:
     """Compress a response payload with zlib if it saves space."""
@@ -173,11 +174,11 @@ def decompress_response(data: bytes) -> bytes:
     if data[:3] == _COMPRESS_MAGIC:
         decompressor = zlib.decompressobj()
         raw = decompressor.decompress(
-            data[3:], _MAX_DECOMPRESSED_RESPONSE_BYTES + 1)
-        if len(raw) > _MAX_DECOMPRESSED_RESPONSE_BYTES or decompressor.unconsumed_tail:
+            data[3:], MAX_MESH_RESPONSE_BYTES + 1)
+        if len(raw) > MAX_MESH_RESPONSE_BYTES or decompressor.unconsumed_tail:
             raise ValueError("Compressed response exceeds expanded size limit")
-        raw += decompressor.flush(_MAX_DECOMPRESSED_RESPONSE_BYTES + 1 - len(raw))
-        if len(raw) > _MAX_DECOMPRESSED_RESPONSE_BYTES:
+        raw += decompressor.flush(MAX_MESH_RESPONSE_BYTES + 1 - len(raw))
+        if len(raw) > MAX_MESH_RESPONSE_BYTES:
             raise ValueError("Compressed response exceeds expanded size limit")
         return raw
     return data

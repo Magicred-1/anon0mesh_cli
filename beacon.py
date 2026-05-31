@@ -78,7 +78,7 @@ RNS.Transport.synthesize_tunnel = staticmethod(_safe_synthesize_tunnel)
 # ── Local ──────────────────────────────────────────────────────────────────────
 from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
-    SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT,
+    SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT, MAX_MESH_REQUEST_BYTES, MAX_MESH_RESPONSE_BYTES,
     decode_json, build_response, compress_response, redact_url, rpc_error_message,
     load_dotenv_private, positive_int, restrict_private_file_permissions, save_private_identity,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
@@ -246,6 +246,10 @@ def forward_plain_rpc(req: dict, req_id: int, count: int, method: str) -> bytes:
             verify=_cert,
         )
         http_resp.raise_for_status()
+        result_bytes = http_resp.content
+        if len(result_bytes) > MAX_MESH_RESPONSE_BYTES:
+            log_err(f"[#{count}] Solana RPC response exceeds mesh size limit")
+            return build_response(error="Solana RPC response exceeds mesh size limit", req_id=req_id)
         try:
             parsed = http_resp.json()
             if "result" in parsed:
@@ -260,7 +264,7 @@ def forward_plain_rpc(req: dict, req_id: int, count: int, method: str) -> bytes:
                             log_warn(f"  sim> {line}")
         except Exception:
             pass
-        return http_resp.content
+        return result_bytes
     except requests.exceptions.Timeout:
         log_err(f"[#{count}] Solana RPC timeout  method={method}")
         return build_response(error="Solana RPC timeout", req_id=req_id)
@@ -342,8 +346,11 @@ def rpc_request_handler(path, data, request_id, link_id, remote_identity, reques
         RNS.prettyhexrep(remote_identity.hash)
         if remote_identity else "anonymous"
     )
-    log_info(f"Request from {remote_id_str}  path={path}  size={len(data)}B")
-    raw = forward_to_solana(bytes(data))
+    data_bytes = bytes(data)
+    log_info(f"Request from {remote_id_str}  path={path}  size={len(data_bytes)}B")
+    if len(data_bytes) > MAX_MESH_REQUEST_BYTES:
+        return build_response(error="Mesh request exceeds size limit")
+    raw = forward_to_solana(data_bytes)
     compressed = compress_response(raw)
     if len(compressed) < len(raw):
         log_info(f"Compressed response {len(raw)}B → {len(compressed)}B ({100 - len(compressed)*100//len(raw)}% saved)")

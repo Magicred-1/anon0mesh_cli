@@ -171,7 +171,7 @@ def test_compressed_response_roundtrip():
 
 
 def test_decompress_response_rejects_expansion_over_limit():
-    raw = b"x" * (shared._MAX_DECOMPRESSED_RESPONSE_BYTES + 1)
+    raw = b"x" * (shared.MAX_MESH_RESPONSE_BYTES + 1)
     compressed = shared._COMPRESS_MAGIC + zlib.compress(raw)
     with pytest.raises(ValueError, match="expanded size limit"):
         shared.decompress_response(compressed)

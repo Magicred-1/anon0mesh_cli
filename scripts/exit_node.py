@@ -38,7 +38,7 @@ except ImportError:
 
 from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
-    SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT,
+    SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT, MAX_MESH_REQUEST_BYTES, MAX_MESH_RESPONSE_BYTES,
     decode_json, build_response, compress_response, redact_url, rpc_error_message,
     positive_int, restrict_private_file_permissions, save_private_identity,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
@@ -113,6 +113,13 @@ def forward_rpc(raw_request: bytes) -> tuple[bytes, str, float]:
         )
         http_resp.raise_for_status()
         result_bytes = http_resp.content
+        if len(result_bytes) > MAX_MESH_RESPONSE_BYTES:
+            log_err(f"[#{count}] ← {method}  response exceeds mesh size limit")
+            return (
+                build_response(error="Solana RPC response exceeds mesh size limit", req_id=req_id),
+                method,
+                (time.monotonic() - t0) * 1000,
+            )
         rtt_ms = (time.monotonic() - t0) * 1000
 
         # Log result summary
@@ -169,6 +176,8 @@ def rpc_request_handler(path, data, request_id, link_id, remote_identity, reques
     )
     data_bytes = bytes(data)
     log_info(f"Request from {remote}  size={len(data_bytes)}B")
+    if len(data_bytes) > MAX_MESH_REQUEST_BYTES:
+        return build_response(error="Mesh request exceeds size limit")
 
     raw_response, method, rtt_ms = forward_rpc(data_bytes)
     compressed = compress_response(raw_response)
