@@ -702,6 +702,7 @@ def create_nonce_account(
         log_err(f"Failed to load payer keypair: {exc}")
         return None
 
+    generated_nonce_path = None
     if nonce_keypair_path:
         try:
             nonce_kp = _load_private_keypair(nonce_keypair_path)
@@ -717,81 +718,93 @@ def create_nonce_account(
         except OSError as exc:
             log_err(f"Failed to save nonce keypair: {exc}")
             return None
+        generated_nonce_path = save_path
         log_ok(f"Generated nonce keypair → {save_path}")
 
-    payer_pubkey     = payer.pubkey()
-    nonce_pubkey     = nonce_kp.pubkey()
+    submitted = False
     try:
-        authority_pubkey = Pubkey.from_string(authority_address) if authority_address else payer_pubkey
-    except ValueError as exc:
-        log_err(f"Invalid authority address: {exc}")
-        return None
+        payer_pubkey     = payer.pubkey()
+        nonce_pubkey     = nonce_kp.pubkey()
+        try:
+            authority_pubkey = Pubkey.from_string(authority_address) if authority_address else payer_pubkey
+        except ValueError as exc:
+            log_err(f"Invalid authority address: {exc}")
+            return None
 
-    log_info(f"Payer:         {payer_pubkey}")
-    log_info(f"Nonce account: {nonce_pubkey}")
-    log_info(f"Authority:     {authority_pubkey}")
+        log_info(f"Payer:         {payer_pubkey}")
+        log_info(f"Nonce account: {nonce_pubkey}")
+        log_info(f"Authority:     {authority_pubkey}")
 
-    from rpc import rpc_call, get_recent_blockhash, _extract_result
+        from rpc import rpc_call, get_recent_blockhash, _extract_result
 
-    log_info("Fetching minimum balance for rent exemption...")
-    resp = rpc_call("getMinimumBalanceForRentExemption", [NONCE_ACCOUNT_LENGTH])
-    if resp is None:
-        log_err("No response from beacon"); return None
-    if "error" in resp:
-        log_err(f"RPC error: {resp['error']}"); return None
-    rent_lamports = _extract_result(resp)
-    if not _validate_u64(rent_lamports, "Rent lamports"):
-        log_err(f"Unexpected getMinimumBalanceForRentExemption response: {rent_lamports}")
-        return None
-    log_info(f"Rent-exempt minimum: {rent_lamports:,} lamports ({rent_lamports / 1e9:.9f} SOL)")
+        log_info("Fetching minimum balance for rent exemption...")
+        resp = rpc_call("getMinimumBalanceForRentExemption", [NONCE_ACCOUNT_LENGTH])
+        if resp is None:
+            log_err("No response from beacon"); return None
+        if "error" in resp:
+            log_err(f"RPC error: {resp['error']}"); return None
+        rent_lamports = _extract_result(resp)
+        if not _validate_u64(rent_lamports, "Rent lamports"):
+            log_err(f"Unexpected getMinimumBalanceForRentExemption response: {rent_lamports}")
+            return None
+        log_info(f"Rent-exempt minimum: {rent_lamports:,} lamports ({rent_lamports / 1e9:.9f} SOL)")
 
-    blockhash = get_recent_blockhash()
-    if blockhash is None:
-        log_err("Could not fetch blockhash")
-        return None
+        blockhash = get_recent_blockhash()
+        if blockhash is None:
+            log_err("Could not fetch blockhash")
+            return None
 
-    create_ix = create_account(CreateAccountParams(
-        from_pubkey=payer_pubkey,
-        to_pubkey=nonce_pubkey,
-        lamports=rent_lamports,
-        space=NONCE_ACCOUNT_LENGTH,
-        owner=Pubkey.from_string("11111111111111111111111111111111"),
-    ))
-    init_ix = initialize_nonce_account(InitializeNonceAccountParams(
-        nonce_pubkey=nonce_pubkey,
-        authority=authority_pubkey,
-    ))
+        create_ix = create_account(CreateAccountParams(
+            from_pubkey=payer_pubkey,
+            to_pubkey=nonce_pubkey,
+            lamports=rent_lamports,
+            space=NONCE_ACCOUNT_LENGTH,
+            owner=Pubkey.from_string("11111111111111111111111111111111"),
+        ))
+        init_ix = initialize_nonce_account(InitializeNonceAccountParams(
+            nonce_pubkey=nonce_pubkey,
+            authority=authority_pubkey,
+        ))
 
-    try:
-        bh = Hash.from_string(blockhash)
-    except Exception as exc:
-        log_err(f"Invalid blockhash: {exc}")
-        return None
-    msg = Message.new_with_blockhash([create_ix, init_ix], payer_pubkey, bh)
-    tx  = Transaction.new_unsigned(msg)
-    tx.sign([payer, nonce_kp], bh)
+        try:
+            bh = Hash.from_string(blockhash)
+        except Exception as exc:
+            log_err(f"Invalid blockhash: {exc}")
+            return None
+        msg = Message.new_with_blockhash([create_ix, init_ix], payer_pubkey, bh)
+        tx  = Transaction.new_unsigned(msg)
+        tx.sign([payer, nonce_kp], bh)
 
-    tx_b64 = base64.b64encode(bytes(tx)).decode("utf-8")
-    resp   = rpc_call("sendTransaction", [tx_b64, {"encoding": "base64"}])
-    if resp is None:
-        log_err("No response from beacon for sendTransaction")
-        return None
-    if "error" in resp:
-        log_err(f"Transaction rejected: {rpc_error_message(resp['error'])}")
-        return None
+        tx_b64 = base64.b64encode(bytes(tx)).decode("utf-8")
+        submitted = True
+        resp = rpc_call("sendTransaction", [tx_b64, {"encoding": "base64"}])
+        if resp is None:
+            log_err("No response from beacon for sendTransaction")
+            return None
+        if "error" in resp:
+            log_err(f"Transaction rejected: {rpc_error_message(resp['error'])}")
+            return None
 
-    sig = resp.get("result")
-    if not isinstance(sig, str) or not sig:
-        log_err(f"Unexpected sendTransaction response: {resp}")
-        return None
-    print(f"\n  {GREEN}{BOLD}Nonce account created!{RESET}")
-    print(f"  Nonce account pubkey: {BOLD}{nonce_pubkey}{RESET}")
-    print(f"  Authority:            {authority_pubkey}")
-    print(f"  Funded:               {rent_lamports:,} lamports")
-    print(f"  Signature:            {terminal_safe_text(sig)}")
-    print(f"\n  {DIM}Fetch the nonce value:      get-nonce {nonce_pubkey}{RESET}")
-    print(f"  {DIM}Sign with nonce:  sign-nonce-tx <payer> {nonce_pubkey} <auth> <to> <lamports>{RESET}\n")
-    return str(nonce_pubkey)
+        sig = resp.get("result")
+        if not isinstance(sig, str) or not sig:
+            log_err(f"Unexpected sendTransaction response: {resp}")
+            return None
+        print(f"\n  {GREEN}{BOLD}Nonce account created!{RESET}")
+        print(f"  Nonce account pubkey: {BOLD}{nonce_pubkey}{RESET}")
+        print(f"  Authority:            {authority_pubkey}")
+        print(f"  Funded:               {rent_lamports:,} lamports")
+        print(f"  Signature:            {terminal_safe_text(sig)}")
+        print(f"\n  {DIM}Fetch the nonce value:      get-nonce {nonce_pubkey}{RESET}")
+        print(f"  {DIM}Sign with nonce:  sign-nonce-tx <payer> {nonce_pubkey} <auth> <to> <lamports>{RESET}\n")
+        return str(nonce_pubkey)
+    finally:
+        if generated_nonce_path is not None and not submitted:
+            try:
+                os.unlink(generated_nonce_path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                log_warn(f"Could not remove unused generated nonce keypair: {exc}")
 
 
 def offline_sign_nonce_transfer(

@@ -787,6 +787,30 @@ def test_create_nonce_account_generated_key_permissions(tmp_path, monkeypatch):
     assert stat.S_IMODE(nonce_paths[0].stat().st_mode) == 0o600
 
 
+def test_create_nonce_account_removes_generated_key_after_presubmit_failure(tmp_path, monkeypatch):
+    _write_keypair(tmp_path / "payer.json")
+    monkeypatch.chdir(tmp_path)
+
+    with patch("rpc.rpc_call", return_value=None):
+        result = wallet.create_nonce_account(str(tmp_path / "payer.json"))
+
+    assert result is None
+    assert list(tmp_path.glob("nonce_*.json")) == []
+
+
+def test_create_nonce_account_preserves_generated_key_after_uncertain_submission(tmp_path, monkeypatch):
+    _write_keypair(tmp_path / "payer.json")
+    monkeypatch.chdir(tmp_path)
+    blockhash = "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+
+    with patch("rpc.rpc_call", side_effect=[{"result": 1_447_680}, None]), \
+         patch("rpc.get_recent_blockhash", return_value=blockhash):
+        result = wallet.create_nonce_account(str(tmp_path / "payer.json"))
+
+    assert result is None
+    assert len(list(tmp_path.glob("nonce_*.json"))) == 1
+
+
 def test_create_nonce_account_generated_key_write_failure(tmp_path, capsys):
     _write_keypair(tmp_path / "payer.json")
 
