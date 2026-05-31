@@ -71,6 +71,19 @@ def _http_response(body: bytes):
     return response
 
 
+def _valid_arcium_meta(**overrides):
+    pubkeys = [str(Keypair().pubkey()) for _ in range(4)]
+    meta = {
+        "amount": 1,
+        "mint": pubkeys[0],
+        "payer_ta": pubkeys[1],
+        "recipient": pubkeys[2],
+        "recipient_ta": pubkeys[3],
+    }
+    meta.update(overrides)
+    return meta
+
+
 @pytest.mark.parametrize("payload", [[], "getBalance", 1, None])
 def test_beacon_rejects_non_object_json_without_forwarding(payload):
     with patch.object(beacon.requests, "post") as post:
@@ -271,7 +284,7 @@ def test_beacon_rejects_invalid_arcium_stats_amount(amount, monkeypatch, capsys)
     monkeypatch.setattr(beacon, "arcium", arcium)
 
     beacon._fire_arcium_stats(
-        {"amount": amount, "mint": "mint", "payer_ta": "payer-ta"},
+        _valid_arcium_meta(amount=amount),
         1,
         "test",
     )
@@ -285,7 +298,7 @@ def test_beacon_rejects_non_string_arcium_stats_account(monkeypatch, capsys):
     monkeypatch.setattr(beacon, "arcium", arcium)
 
     beacon._fire_arcium_stats(
-        {"amount": 1, "mint": ["not", "a", "string"], "payer_ta": "payer-ta"},
+        _valid_arcium_meta(mint=["not", "a", "string"]),
         1,
         "test",
     )
@@ -294,12 +307,38 @@ def test_beacon_rejects_non_string_arcium_stats_account(monkeypatch, capsys):
     assert "account metadata must be strings" in capsys.readouterr().out
 
 
+def test_beacon_rejects_invalid_arcium_stats_pubkey(monkeypatch, capsys):
+    arcium = MagicMock(enabled=True)
+    monkeypatch.setattr(beacon, "arcium", arcium)
+
+    beacon._fire_arcium_stats(
+        _valid_arcium_meta(mint="not-a-solana-pubkey"),
+        1,
+        "test",
+    )
+
+    arcium.log_payment_stats.assert_not_called()
+    assert "account metadata must be valid Solana public keys" in capsys.readouterr().out
+
+
+def test_beacon_requires_recipient_token_account_before_queuing_arcium_stats(monkeypatch, capsys):
+    arcium = MagicMock(enabled=True)
+    monkeypatch.setattr(beacon, "arcium", arcium)
+    meta = _valid_arcium_meta()
+    del meta["recipient_ta"]
+
+    beacon._fire_arcium_stats(meta, 1, "test")
+
+    arcium.log_payment_stats.assert_not_called()
+    assert "missing: recipient_ta" in capsys.readouterr().out
+
+
 def test_beacon_queues_valid_arcium_stats_metadata(monkeypatch):
     arcium = MagicMock(enabled=True)
     monkeypatch.setattr(beacon, "arcium", arcium)
 
     beacon._fire_arcium_stats(
-        {"amount": "42", "mint": "mint", "payer_ta": "payer-ta"},
+        _valid_arcium_meta(amount="42"),
         1,
         "test",
     )

@@ -99,6 +99,7 @@ except ImportError:
 try:
     import base64 as _base64
     from solders.keypair    import Keypair     as _Keypair
+    from solders.pubkey     import Pubkey      as _Pubkey
     from solders.transaction import Transaction as _Transaction
     from solders.hash        import Hash        as _Hash
     HAS_SOLDERS = True
@@ -269,14 +270,24 @@ def _resolve_arcium_meta(params: object) -> dict:
     return meta
 
 
+def _is_solana_pubkey(value: object) -> bool:
+    if not HAS_SOLDERS or not isinstance(value, str):
+        return False
+    try:
+        _Pubkey.from_string(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def _fire_arcium_stats(meta: dict, count: int, label: str) -> None:
-    """Call arcium.log_payment_stats if amount, mint, and payer_ta are present."""
+    """Queue Arcium stats only after required payment metadata validates locally."""
     if not arcium or not arcium.enabled:
         return
-    missing = [k for k in ("amount", "mint", "payer_ta") if not meta.get(k)]
+    missing = [k for k in ("amount", "mint", "payer_ta", "recipient", "recipient_ta") if not meta.get(k)]
     if missing:
         log_warn(f"[#{count}] Arcium skipped — missing: {', '.join(missing)}"
-                 f"  (set ARCIUM_MINT / ARCIUM_PAYER_TOKEN_ACCOUNT in .env)")
+                 f"  (set account env vars and include per-payment recipient metadata)")
         return
     raw_amount = meta["amount"]
     if isinstance(raw_amount, bool):
@@ -300,6 +311,9 @@ def _fire_arcium_stats(meta: dict, count: int, label: str) -> None:
         return
     if any(key in meta and not isinstance(meta[key], str) for key in account_fields):
         log_warn(f"[#{count}] Arcium skipped — account metadata must be strings")
+        return
+    if any(meta.get(key) and not _is_solana_pubkey(meta[key]) for key in account_fields):
+        log_warn(f"[#{count}] Arcium skipped — account metadata must be valid Solana public keys")
         return
     try:
         arcium.log_payment_stats(
