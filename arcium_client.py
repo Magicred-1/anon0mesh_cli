@@ -98,6 +98,9 @@ def _run_shim(*args: str, stdin_data: str | None = None, timeout: int = 60) -> d
         raise RuntimeError(f"shim non-JSON output (exit {result.returncode}): {redact_urls(raw[:300])}")
     if not isinstance(data, dict):
         raise RuntimeError(f"shim returned non-object JSON (exit {result.returncode})")
+    if result.returncode != 0:
+        error = data.get("error") or result.stderr.strip() or f"shim error (exit {result.returncode})"
+        raise RuntimeError(redact_urls(str(error)))
     if not data.get("ok"):
         error = data.get("error") or f"shim error (exit {result.returncode})"
         raise RuntimeError(redact_urls(str(error)))

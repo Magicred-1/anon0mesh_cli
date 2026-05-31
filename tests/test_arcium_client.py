@@ -52,6 +52,16 @@ def test_run_shim_ok_false_raises(mock_run, tmp_path):
 
 
 @patch("subprocess.run")
+def test_run_shim_nonzero_exit_rejects_ok_response(mock_run, tmp_path):
+    shim = tmp_path / "rescue_shim.mjs"
+    shim.touch()
+    with patch.object(arcium_client, "SHIM_PATH", shim):
+        mock_run.return_value = _proc(json.dumps({"ok": True}), returncode=1)
+        with pytest.raises(RuntimeError, match=r"shim error \(exit 1\)"):
+            arcium_client._run_shim("keygen")
+
+
+@patch("subprocess.run")
 def test_run_shim_non_json_stdout_raises(mock_run, tmp_path):
     shim = tmp_path / "rescue_shim.mjs"
     shim.touch()
