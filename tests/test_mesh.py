@@ -492,6 +492,12 @@ class TestBeaconPoolAddRemove:
         assert result is False
         assert pool.size() == 0
 
+    def test_add_invalid_hash_characters(self):
+        pool = BeaconPool()
+        result = pool.add("g" * len(VALID_HASH_HEX), connect=False)
+        assert result is False
+        assert pool.size() == 0
+
     def test_add_no_connect(self):
         pool = BeaconPool()
         result = pool.add(VALID_HASH_HEX, connect=False)
@@ -743,6 +749,11 @@ class TestBeaconPoolAddBackground:
     def test_add_background_invalid_hash(self):
         pool = BeaconPool()
         pool.add_background("short")
+        assert pool.size() == 0
+
+    def test_add_background_invalid_hash_characters(self):
+        pool = BeaconPool()
+        pool.add_background("g" * len(VALID_HASH_HEX))
         assert pool.size() == 0
 
     def test_add_background_duplicate_skipped(self):

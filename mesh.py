@@ -49,6 +49,20 @@ from shared import (
 _BACKOFF = [5, 10, 20, 40, 60, 120, 300]
 
 
+def _normalize_dest_hash(dest_hash_hex: str) -> str | None:
+    dest_hash_hex = dest_hash_hex.lower().strip()
+    expected = (RNS.Reticulum.TRUNCATED_HASHLENGTH // 8) * 2
+    if len(dest_hash_hex) != expected:
+        log_err(f"Invalid hash length ({len(dest_hash_hex)} chars, need {expected})")
+        return None
+    try:
+        bytes.fromhex(dest_hash_hex)
+    except ValueError:
+        log_err("Invalid hash: expected hexadecimal characters")
+        return None
+    return dest_hash_hex
+
+
 class BeaconLink:
     """
     Manages one encrypted RNS link to one beacon.
@@ -275,10 +289,8 @@ class BeaconPool:
 
     def add_background(self, dest_hash_hex: str, label: str = "") -> None:
         """Fire-and-forget connect. Returns immediately; link becomes active in the background."""
-        dest_hash_hex = dest_hash_hex.lower().strip()
-        expected = (RNS.Reticulum.TRUNCATED_HASHLENGTH // 8) * 2
-        if len(dest_hash_hex) != expected:
-            log_err(f"Invalid hash length ({len(dest_hash_hex)} chars, need {expected})")
+        dest_hash_hex = _normalize_dest_hash(dest_hash_hex)
+        if dest_hash_hex is None:
             return
         with self._lock:
             if dest_hash_hex in self._links:
@@ -304,10 +316,8 @@ class BeaconPool:
             return self._pending_count
 
     def add(self, dest_hash_hex: str, label: str = "", connect: bool = True) -> bool:
-        dest_hash_hex = dest_hash_hex.lower().strip()
-        expected = (RNS.Reticulum.TRUNCATED_HASHLENGTH // 8) * 2
-        if len(dest_hash_hex) != expected:
-            log_err(f"Invalid hash length ({len(dest_hash_hex)} chars, need {expected})")
+        dest_hash_hex = _normalize_dest_hash(dest_hash_hex)
+        if dest_hash_hex is None:
             return False
         with self._lock:
             if dest_hash_hex in self._links:
