@@ -95,6 +95,10 @@ systemd_escape_path() {
   printf '%s' "$value"
 }
 
+config_value_is_safe() {
+  [[ ! "$1" =~ [[:cntrl:]] ]]
+}
+
 # ── Defaults ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/venv"
@@ -434,6 +438,11 @@ if [[ "$INSTALL_RNODE" == true ]]; then
     while IFS= read -r dev; do
       [[ -n "$dev" ]] && SERIAL_DEVICES+=("$dev")
     done < <(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || true)
+  fi
+
+  if [[ -n "$RNODE_PORT" ]] && ! config_value_is_safe "$RNODE_PORT"; then
+    log_warn "Skipping RNode setup — serial port contains control characters."
+    RNODE_PORT=""
   fi
 
   if [[ -n "$RNODE_PORT" ]]; then

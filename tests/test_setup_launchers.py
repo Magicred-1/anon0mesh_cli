@@ -109,6 +109,19 @@ def test_systemd_escape_path_rejects_unsupported_characters(tmp_path, name):
     assert "Cannot write systemd service" in result.stdout
 
 
+def test_config_value_is_safe_accepts_serial_path(tmp_path):
+    result = _run_helper('config_value_is_safe "$DEST"', tmp_path / "ttyUSB0")
+
+    assert result.returncode == 0
+
+
+@pytest.mark.parametrize("name", ["before\nafter", "before\rafter", "before\x1bafter"])
+def test_config_value_is_safe_rejects_control_characters(tmp_path, name):
+    result = _run_helper('config_value_is_safe "$DEST"', tmp_path / name)
+
+    assert result.returncode != 0
+
+
 def test_setup_inline_python_receives_filesystem_paths_through_env():
     setup = SETUP.read_text()
 
