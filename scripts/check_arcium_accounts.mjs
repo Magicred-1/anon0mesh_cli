@@ -6,17 +6,16 @@
 
 import { Connection, PublicKey } from "@solana/web3.js";
 import { execFileSync } from "node:child_process";
-import { chmodSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { readPrivateTextFileSync } from "./private_file.mjs";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const envPath = join(__dir, "..", ".env");
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 try {
-    chmodSync(envPath, 0o600);
-    const envLines = readFileSync(envPath, "utf8").split("\n");
+    const envLines = readPrivateTextFileSync(envPath).split("\n");
     for (const line of envLines) {
         const t = line.trim();
         if (!t || t.startsWith("#") || !t.includes("=")) continue;
