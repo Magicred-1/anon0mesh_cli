@@ -139,6 +139,19 @@ def test_beacon_cosigns_allowlisted_execute_payment_shape(monkeypatch):
     assert submitted.verify_with_results() == [True, True]
 
 
+def test_beacon_rejects_noncanonical_base64_cosign_transaction(monkeypatch):
+    tx, broadcaster = _execute_payment_transaction()
+    monkeypatch.setattr(beacon, "HAS_SOLDERS", True)
+    monkeypatch.setattr(beacon, "beacon_cosign_keypair", broadcaster)
+    encoded = base64.b64encode(bytes(tx)).decode() + "!"
+
+    with patch.object(beacon, "forward_plain_rpc") as forward:
+        response = decode_json(beacon._handle_cosign_transaction([encoded], 7, 1))
+
+    assert response["error"]["message"].startswith("Co-sign failed:")
+    forward.assert_not_called()
+
+
 def test_beacon_rejects_cosign_shape_that_can_spend_broadcaster_funds(monkeypatch):
     _, broadcaster = _execute_payment_transaction()
     spend = transfer(TransferParams(
@@ -215,7 +228,7 @@ def test_beacon_logs_skip_for_malformed_arcium_stats_metadata(params, monkeypatc
     assert "Arcium skipped" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("amount", [-1, True, 1.5, str(1 << 64)])
+@pytest.mark.parametrize("amount", [-1, True, 1.5, str(1 << 64), "9" * 100_000, "١"])
 def test_beacon_rejects_invalid_arcium_stats_amount(amount, monkeypatch, capsys):
     arcium = MagicMock(enabled=True)
     monkeypatch.setattr(beacon, "arcium", arcium)

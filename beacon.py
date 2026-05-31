@@ -223,7 +223,7 @@ def _handle_cosign_transaction(params: list, req_id: int, count: int) -> bytes:
         return build_response(error="cosignTransaction: params[0] must be a base64 tx", req_id=req_id)
 
     try:
-        tx_bytes = _base64.b64decode(params[0])
+        tx_bytes = _base64.b64decode(params[0], validate=True)
         tx       = _Transaction.from_bytes(tx_bytes)
         rejection = _validate_cosign_transaction(tx)
         if rejection:
@@ -286,7 +286,12 @@ def _fire_arcium_stats(meta: dict, count: int, label: str) -> None:
         amount = None
     elif isinstance(raw_amount, int):
         amount = raw_amount
-    elif isinstance(raw_amount, str) and raw_amount.isdecimal():
+    elif (
+        isinstance(raw_amount, str)
+        and raw_amount.isascii()
+        and raw_amount.isdecimal()
+        and len(raw_amount) <= 20
+    ):
         amount = int(raw_amount)
     else:
         amount = None
