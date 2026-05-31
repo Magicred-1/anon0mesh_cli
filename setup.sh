@@ -88,6 +88,7 @@ for arg in "$@"; do
     --wallet-setup) SETUP_WALLET=true ;;
     --help|-h)
       echo "Usage: $0 [--beacon] [--client] [--both] [--systemd] [--ble] [--rnode] [--meshtastic] [--mainnet|--devnet] [--wallet-setup]"
+      echo "For unattended --rnode setup, set ANONMESH_RNODE_PORT and ANONMESH_RNODE_REGION=us|eu."
       exit 0 ;;
   esac
 done
@@ -352,7 +353,7 @@ if [[ "$INSTALL_RNODE" == true ]]; then
   log_step "RNode LoRa interface (Heltec V3)"
 
   # ── Detect serial device ──────────────────────────────────────────────────
-  RNODE_PORT=""
+  RNODE_PORT="${ANONMESH_RNODE_PORT:-}"
   SERIAL_DEVICES=()
 
   if [[ "$OS_TYPE" == "macos" ]]; then
@@ -365,7 +366,9 @@ if [[ "$INSTALL_RNODE" == true ]]; then
     done < <(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || true)
   fi
 
-  if [[ ${#SERIAL_DEVICES[@]} -eq 0 ]]; then
+  if [[ -n "$RNODE_PORT" ]]; then
+    log_info "Using RNode serial device from ANONMESH_RNODE_PORT: $RNODE_PORT"
+  elif [[ ${#SERIAL_DEVICES[@]} -eq 0 ]]; then
     log_warn "No serial devices found."
     log_info "  Plug in the Heltec V3 and check:"
     if [[ "$OS_TYPE" == "macos" ]]; then
@@ -373,10 +376,14 @@ if [[ "$INSTALL_RNODE" == true ]]; then
     else
       log_info "    ls /dev/ttyUSB*"
     fi
-    echo ""
-    read -rp "  Enter serial port manually (or press Enter to skip): " manual_port
-    if [[ -n "$manual_port" ]]; then
-      RNODE_PORT="$manual_port"
+    if [[ "$NONINTERACTIVE" == true ]]; then
+      log_info "  Set ANONMESH_RNODE_PORT and ANONMESH_RNODE_REGION=us|eu for unattended setup."
+    else
+      echo ""
+      read -rp "  Enter serial port manually (or press Enter to skip): " manual_port
+      if [[ -n "$manual_port" ]]; then
+        RNODE_PORT="$manual_port"
+      fi
     fi
   elif [[ ${#SERIAL_DEVICES[@]} -eq 1 ]]; then
     RNODE_PORT="${SERIAL_DEVICES[0]}"
@@ -386,31 +393,49 @@ if [[ "$INSTALL_RNODE" == true ]]; then
     for i in "${!SERIAL_DEVICES[@]}"; do
       echo "  $((i+1))) ${SERIAL_DEVICES[$i]}"
     done
-    read -rp "  Select device [1-${#SERIAL_DEVICES[@]}]: " dev_choice
-    if [[ "$dev_choice" =~ ^[0-9]+$ ]] && (( dev_choice >= 1 && dev_choice <= ${#SERIAL_DEVICES[@]} )); then
-      RNODE_PORT="${SERIAL_DEVICES[$((dev_choice-1))]}"
+    if [[ "$NONINTERACTIVE" == true ]]; then
+      log_warn "Skipping RNode setup — set ANONMESH_RNODE_PORT to select one device."
     else
-      log_warn "Invalid choice — skipping RNode setup"
+      read -rp "  Select device [1-${#SERIAL_DEVICES[@]}]: " dev_choice
+      if [[ "$dev_choice" =~ ^[0-9]+$ ]] && (( dev_choice >= 1 && dev_choice <= ${#SERIAL_DEVICES[@]} )); then
+        RNODE_PORT="${SERIAL_DEVICES[$((dev_choice-1))]}"
+      else
+        log_warn "Invalid choice — skipping RNode setup"
+      fi
     fi
   fi
 
   if [[ -n "$RNODE_PORT" ]]; then
     # ── Frequency region ──────────────────────────────────────────────────
-    echo ""
-    echo -e "${BOLD}LoRa frequency region:${R}"
-    echo "  1) EU 868 MHz  (Europe, Africa, Middle East)"
-    echo "  2) US 915 MHz  (Americas, Australia)"
-    read -rp "Choice [1/2, default=1]: " freq_choice
-
-    if [[ "$freq_choice" == "2" ]]; then
-      RNODE_FREQ=915000000
-      RNODE_TXPOWER=22
-      RNODE_REGION="US 915 MHz"
-    else
-      RNODE_FREQ=867200000
-      RNODE_TXPOWER=14
-      RNODE_REGION="EU 868 MHz"
+    region_choice="${ANONMESH_RNODE_REGION:-}"
+    if [[ -z "$region_choice" && "$NONINTERACTIVE" == false ]]; then
+      echo ""
+      echo -e "${BOLD}LoRa frequency region:${R}"
+      echo "  1) EU 868 MHz  (Europe, Africa, Middle East)"
+      echo "  2) US 915 MHz  (Americas, Australia)"
+      read -rp "Choice [1/2, default=1]: " freq_choice
+      [[ "$freq_choice" == "2" ]] && region_choice="us" || region_choice="eu"
     fi
+
+    case "${region_choice,,}" in
+      us)
+        RNODE_FREQ=915000000
+        RNODE_TXPOWER=22
+        RNODE_REGION="US 915 MHz"
+        ;;
+      eu)
+        RNODE_FREQ=867200000
+        RNODE_TXPOWER=14
+        RNODE_REGION="EU 868 MHz"
+        ;;
+      *)
+        log_warn "Skipping RNode setup — set ANONMESH_RNODE_REGION=us|eu for the legal radio region."
+        RNODE_PORT=""
+        ;;
+    esac
+  fi
+
+  if [[ -n "$RNODE_PORT" ]]; then
 
     log_info "Configuring RNode: $RNODE_PORT @ $RNODE_REGION"
 

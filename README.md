@@ -48,8 +48,17 @@ chmod +x setup.sh
 ./setup.sh --systemd         # also install beacon as a systemd service
 ./setup.sh --ble             # install experimental BLE research deps only
 ./setup.sh --meshtastic      # install Meshtastic research deps only
+./setup.sh --rnode           # configure detected RNode LoRa hardware
 ./setup.sh --wallet-setup    # generate signing keypair + durable nonce account
 ./setup.sh --mainnet         # target Solana mainnet-beta instead of devnet
+```
+
+For unattended RNode setup, specify the serial device and legal radio region
+explicitly:
+
+```bash
+ANONMESH_RNODE_PORT=/dev/ttyUSB0 ANONMESH_RNODE_REGION=us \
+  ./setup.sh --beacon --rnode
 ```
 
 ## Configuration
