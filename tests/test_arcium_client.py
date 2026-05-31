@@ -386,6 +386,28 @@ def test_log_payment_stats_rejects_invalid_metadata_without_running_shim(mock_sh
 
 # ── ArciumBeacon (disabled path) ──────────────────────────────────────────────
 
+@pytest.mark.parametrize("kwargs", [
+    {"rpc_url": ""},
+    {"mxe_pubkey_hex": "ab"},
+    {"cluster_offset": -1},
+    {"cluster_offset": 1 << 32},
+    {"program_id": "not-a-pubkey"},
+])
+def test_arcium_client_rejects_invalid_configuration(monkeypatch, kwargs):
+    monkeypatch.setattr(arcium_client, "HAS_SOLANA", True)
+    values = {
+        "rpc_url": "https://rpc.example.test",
+        "payer_keypair": MagicMock(),
+        "mxe_pubkey_hex": VALID_HEX_32,
+        "cluster_offset": 456,
+        "program_id": arcium_client.MXE_PROGRAM_ID,
+    }
+    values.update(kwargs)
+
+    with pytest.raises(ValueError):
+        arcium_client.ArciumBeaconClient(**values)
+
+
 def test_arcium_beacon_disabled_when_env_not_set(monkeypatch):
     monkeypatch.setenv("ARCIUM_ENABLED", "0")
     beacon = arcium_client.ArciumBeacon.from_env()
@@ -446,7 +468,7 @@ def test_arcium_beacon_from_env_repairs_payer_permissions(tmp_path, monkeypatch)
     keypair_type.from_bytes.return_value = object()
     monkeypatch.setenv("ARCIUM_ENABLED", "1")
     monkeypatch.setenv("ARCIUM_PAYER_KEYPAIR", str(path))
-    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", "ab")
+    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", VALID_HEX_32)
     monkeypatch.setenv("ARCIUM_CLUSTER_OFFSET", "456")
     monkeypatch.setattr(arcium_client, "HAS_SOLANA", True)
     monkeypatch.setattr(arcium_client, "Keypair", keypair_type)
@@ -471,7 +493,7 @@ def test_arcium_beacon_from_env_refuses_symlinked_payer_without_chmod_target(
     path.symlink_to(target)
     monkeypatch.setenv("ARCIUM_ENABLED", "1")
     monkeypatch.setenv("ARCIUM_PAYER_KEYPAIR", str(path))
-    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", "ab")
+    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", VALID_HEX_32)
     monkeypatch.setattr(arcium_client, "HAS_SOLANA", True)
 
     beacon = arcium_client.ArciumBeacon.from_env()
@@ -489,7 +511,7 @@ def test_arcium_beacon_from_env_invalid_cluster_offset_disables(tmp_path, monkey
     keypair_type.from_bytes.return_value = object()
     monkeypatch.setenv("ARCIUM_ENABLED", "1")
     monkeypatch.setenv("ARCIUM_PAYER_KEYPAIR", str(path))
-    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", "ab")
+    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", VALID_HEX_32)
     monkeypatch.setenv("ARCIUM_CLUSTER_OFFSET", offset)
     monkeypatch.setattr(arcium_client, "HAS_SOLANA", True)
     monkeypatch.setattr(arcium_client, "Keypair", keypair_type)

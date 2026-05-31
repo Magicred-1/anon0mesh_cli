@@ -253,6 +253,14 @@ class ArciumBeaconClient:
     ):
         if not HAS_SOLANA:
             raise ImportError("pip install solders solana")
+        if not isinstance(rpc_url, str) or not rpc_url:
+            raise ValueError("Arcium RPC URL must be a non-empty string")
+        if not _is_fixed_hex(mxe_pubkey_hex, 32):
+            raise ValueError("Arcium MXE public key must be 32 hexadecimal bytes")
+        if isinstance(cluster_offset, bool) or not isinstance(cluster_offset, int) or not 0 <= cluster_offset <= _MAX_U32:
+            raise ValueError(f"Arcium cluster offset must be between 0 and {_MAX_U32}")
+        if not _is_solana_pubkey(program_id):
+            raise ValueError("Arcium MXE program ID must be a Solana public key")
         self.rpc_url        = rpc_url
         self.payer          = payer_keypair
         self.mxe_pubkey_hex = mxe_pubkey_hex
