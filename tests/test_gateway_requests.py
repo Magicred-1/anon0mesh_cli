@@ -327,6 +327,32 @@ def test_beacon_logs_scalar_rpc_error_without_traceback(capsys):
     assert "Solana error: busy" in capsys.readouterr().out
 
 
+def test_beacon_ignores_non_list_simulation_logs(capsys):
+    body = {"error": {"message": "failed", "data": {"logs": "do-not-iterate"}}}
+    http_response = MagicMock()
+    http_response.content = json.dumps(body).encode()
+
+    with patch.object(beacon.requests, "post", return_value=http_response):
+        assert decode_json(beacon.forward_plain_rpc({}, 1, 1, "simulateTransaction")) == body
+
+    assert "sim>" not in capsys.readouterr().out
+
+
+def test_beacon_caps_simulation_log_rendering(capsys):
+    logs = [f"log-{index}" for index in range(101)]
+    body = {"error": {"message": "failed", "data": {"logs": logs}}}
+    http_response = MagicMock()
+    http_response.content = json.dumps(body).encode()
+
+    with patch.object(beacon.requests, "post", return_value=http_response):
+        assert decode_json(beacon.forward_plain_rpc({}, 1, 1, "simulateTransaction")) == body
+
+    output = capsys.readouterr().out
+    assert "sim> log-99" in output
+    assert "sim> log-100" not in output
+    assert "1 more lines omitted" in output
+
+
 def test_exit_node_logs_scalar_rpc_error_without_traceback(capsys):
     http_response = MagicMock()
     http_response.content = b'{"error":"busy"}'

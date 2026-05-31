@@ -196,6 +196,7 @@ def load_dotenv_private(path: str | os.PathLike[str]) -> None:
 _COMPRESS_MAGIC = b"\x00zl"
 MAX_MESH_REQUEST_BYTES = 256 * 1024
 MAX_MESH_RESPONSE_BYTES = 1024 * 1024
+MAX_RENDERED_LOG_LINES = 100
 
 def compress_response(data: bytes) -> bytes:
     """Compress a response payload with zlib if it saves space."""

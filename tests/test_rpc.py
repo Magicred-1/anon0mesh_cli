@@ -410,6 +410,17 @@ def test_simulate_transaction_escapes_terminal_control_bytes(mock_pool, capsys):
     assert "\x1b[2J" not in output
 
 
+def test_simulate_transaction_caps_rendered_logs(mock_pool, capsys):
+    mock_pool.call.return_value = {
+        "result": {"value": {"err": None, "logs": [f"log-{index}" for index in range(101)]}}
+    }
+    rpc.simulate_transaction("b64tx")
+    output = capsys.readouterr().out
+    assert "log-99" in output
+    assert "log-100" not in output
+    assert "1 simulation log lines omitted" in output
+
+
 # ── get_nonce_account ─────────────────────────────────────────────────────────
 
 _NONCE_RESP = {

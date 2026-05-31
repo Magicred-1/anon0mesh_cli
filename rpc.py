@@ -11,7 +11,8 @@ import concurrent.futures
 
 import state
 from shared import (
-    is_u64, log_info, log_ok, log_warn, log_err, rpc_error_message, terminal_safe_text,
+    MAX_RENDERED_LOG_LINES, is_u64, log_info, log_ok, log_warn, log_err,
+    rpc_error_message, terminal_safe_text,
     BOLD, CYAN, GREEN, RED, RESET, DIM,
 )
 
@@ -272,8 +273,10 @@ def simulate_transaction(signed_tx_b64):
     if not isinstance(logs, list) or any(not isinstance(line, str) for line in logs):
         log_warn(f"Unexpected simulateTransaction logs: {json.dumps(logs)}")
         return
-    for line in logs:
+    for line in logs[:MAX_RENDERED_LOG_LINES]:
         print(f"  {DIM}{terminal_safe_text(line)}{RESET}")
+    if len(logs) > MAX_RENDERED_LOG_LINES:
+        log_warn(f"{len(logs) - MAX_RENDERED_LOG_LINES} simulation log lines omitted")
     print()
 
 

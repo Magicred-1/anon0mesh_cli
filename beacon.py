@@ -80,6 +80,7 @@ RNS.Transport.synthesize_tunnel = staticmethod(_safe_synthesize_tunnel)
 from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT, MAX_MESH_REQUEST_BYTES, MAX_MESH_RESPONSE_BYTES,
+    MAX_RENDERED_LOG_LINES,
     decode_json, decode_rpc_response, build_response, compress_response, redact_url, rpc_error_message,
     load_dotenv_private, positive_int, restrict_private_file_permissions, save_private_identity,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
@@ -369,8 +370,13 @@ def forward_plain_rpc(req: dict, req_id: int, count: int, method: str) -> bytes:
             if isinstance(error, dict):
                 logs = error.get("data", {}) or {}
                 if isinstance(logs, dict):
-                    for line in (logs.get("logs") or []):
-                        log_warn(f"  sim> {line}")
+                    sim_logs = logs.get("logs")
+                    if isinstance(sim_logs, list):
+                        for line in sim_logs[:MAX_RENDERED_LOG_LINES]:
+                            if isinstance(line, str):
+                                log_warn(f"  sim> {line}")
+                        if len(sim_logs) > MAX_RENDERED_LOG_LINES:
+                            log_warn(f"  sim> ... {len(sim_logs) - MAX_RENDERED_LOG_LINES} more lines omitted")
         return result_bytes
     except requests.exceptions.Timeout:
         log_err(f"[#{count}] Solana RPC timeout  method={method}")
