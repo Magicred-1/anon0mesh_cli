@@ -141,7 +141,7 @@ Confidential SOL balance queries are not implemented. The retained client
 
 After the beacon relays a `sendTransaction` containing Arcium metadata, it:
 
-1. Calls `rescue_shim.mjs get_arcium_accounts` to derive all on-chain PDA addresses.
+1. Calls `rescue_shim.mjs arcium_accounts` to derive all on-chain PDA addresses.
 2. Encrypts the payment amount with x25519 + RescueCipher (shim-side).
 3. Auto-creates any missing SPL token ATAs (payer, recipient, treasury, broadcaster).
 4. Builds a durable-nonce transaction with `execute_payment` on the **ble_revshare** program (`7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks`).
@@ -170,7 +170,7 @@ node scripts/init_comp_def_once.mjs
 |---|---|
 | `check_arcium_accounts.mjs` | Verify all Arcium PDAs / ATAs exist on devnet |
 | `fetch_idl.mjs` | Fetch the deployed program IDL |
-| `get_whitelists.js` | List whitelisted mints |
+| `get_whitelists.mjs` | List whitelisted mints |
 | `init_comp_def_once.mjs` | Initialise the `payment_stats` computation definition |
 
 Run any with:
