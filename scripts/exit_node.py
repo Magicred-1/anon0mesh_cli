@@ -262,8 +262,11 @@ def setup_exit_node(config_path: str | None, network: str, custom_rpc: str | Non
     custom_rpc = custom_rpc or os.getenv("ANONMESH_RPC_URL")
     if custom_rpc:
         rpc_endpoint = custom_rpc
-    elif network in SOLANA_ENDPOINTS:
+    elif SOLANA_ENDPOINTS.get(network):
         rpc_endpoint = SOLANA_ENDPOINTS[network]
+    elif network == "custom":
+        log_err("Custom network requires --rpc or ANONMESH_RPC_URL")
+        sys.exit(1)
     else:
         log_err(f"Unknown network: {network}")
         sys.exit(1)

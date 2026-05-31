@@ -85,6 +85,20 @@ def test_exit_node_rejects_non_object_json_without_forwarding(payload):
     post.assert_not_called()
 
 
+def test_beacon_custom_network_requires_rpc_url(monkeypatch, capsys):
+    monkeypatch.delenv("SOLANA_RPC_URL", raising=False)
+    with pytest.raises(SystemExit):
+        beacon.setup_beacon(None, "custom", None)
+    assert "Custom network requires --rpc or SOLANA_RPC_URL" in capsys.readouterr().out
+
+
+def test_exit_node_custom_network_requires_rpc_url(monkeypatch, capsys):
+    monkeypatch.delenv("ANONMESH_RPC_URL", raising=False)
+    with pytest.raises(SystemExit):
+        exit_node.setup_exit_node(None, "custom", None)
+    assert "Custom network requires --rpc or ANONMESH_RPC_URL" in capsys.readouterr().out
+
+
 def test_beacon_rejects_oversized_mesh_request_without_forwarding():
     with patch.object(beacon, "forward_to_solana") as forward:
         response = decode_json(beacon.rpc_request_handler(

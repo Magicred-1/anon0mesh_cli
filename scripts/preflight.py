@@ -177,7 +177,11 @@ def main() -> int:
     config = read_config(checks, config_file(args.config))
     check_optional_transports(checks, config, args)
     if not args.skip_rpc:
-        check_rpc(checks, args.rpc or os.getenv("ANONMESH_RPC_URL") or SOLANA_ENDPOINTS[args.network])
+        rpc_url = args.rpc or os.getenv("ANONMESH_RPC_URL") or SOLANA_ENDPOINTS[args.network]
+        if rpc_url:
+            check_rpc(checks, rpc_url)
+        else:
+            checks.fail("Custom network requires --rpc or ANONMESH_RPC_URL")
 
     if checks.failures:
         print(f"\npreflight failed: {checks.failures} check(s)")

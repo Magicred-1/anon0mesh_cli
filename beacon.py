@@ -657,8 +657,11 @@ def setup_beacon(config_path: str | None, network: str, custom_rpc: str | None, 
     custom_rpc = custom_rpc or os.getenv("SOLANA_RPC_URL")
     if custom_rpc:
         rpc_endpoint = custom_rpc
-    elif network in SOLANA_ENDPOINTS:
+    elif SOLANA_ENDPOINTS.get(network):
         rpc_endpoint = SOLANA_ENDPOINTS[network]
+    elif network == "custom":
+        log_err("Custom network requires --rpc or SOLANA_RPC_URL")
+        sys.exit(1)
     else:
         log_err(f"Unknown network: {network}. Choose from {list(SOLANA_ENDPOINTS.keys())}")
         sys.exit(1)

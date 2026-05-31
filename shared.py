@@ -83,8 +83,10 @@ def decode_rpc_response(raw: bytes) -> dict:
     return parsed
 
 
-def redact_url(url: str) -> str:
+def redact_url(url: str | None) -> str:
     """Return a log-safe endpoint label without credentials, path tokens, or query params."""
+    if not isinstance(url, str):
+        return "<redacted-rpc-url>"
     try:
         parts = urlsplit(url)
         host = parts.hostname

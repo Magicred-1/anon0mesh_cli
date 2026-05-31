@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from RNS.vendor.configobj import ConfigObj
 import requests
 
+from scripts import preflight
 from scripts.preflight import Checks, check_optional_transports, check_rpc
 
 
@@ -113,3 +114,22 @@ def test_rpc_rejects_non_object_health_response(capsys):
     assert "unexpected getHealth response" in output
     assert r"\x1b[2J" in output
     assert "\x1b[2J" not in output
+
+
+def test_main_custom_network_requires_rpc_url(monkeypatch, capsys):
+    monkeypatch.delenv("ANONMESH_RPC_URL", raising=False)
+    monkeypatch.setattr(preflight, "parse_args", lambda: Namespace(
+        ble=False,
+        rnode=False,
+        meshtastic=False,
+        config=None,
+        network="custom",
+        rpc=None,
+        skip_rpc=False,
+    ))
+    monkeypatch.setattr(preflight, "check_python", lambda _checks: None)
+    monkeypatch.setattr(preflight, "check_module", lambda *_args: None)
+    monkeypatch.setattr(preflight, "read_config", lambda *_args: {})
+
+    assert preflight.main() == 1
+    assert "Custom network requires --rpc or ANONMESH_RPC_URL" in capsys.readouterr().out

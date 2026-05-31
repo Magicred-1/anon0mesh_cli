@@ -122,7 +122,7 @@ Usage: $0 {preflight|run|start|status|logs|stop}
 
 Environment:
   ANONMESH_CONFIG_DIR   Reticulum config directory (default: ~/.reticulum)
-  ANONMESH_NETWORK      devnet or mainnet (default: devnet)
+  ANONMESH_NETWORK      devnet, testnet, mainnet, or custom (default: devnet)
   ANONMESH_RPC_URL      Optional custom Solana RPC URL
   ANONMESH_PYTHON       Python executable (default: ./venv/bin/python)
   ANONMESH_STATE_DIR    PID and log directory (default: ~/.local/state/anonmesh)
