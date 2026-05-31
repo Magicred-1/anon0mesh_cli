@@ -173,7 +173,6 @@ cp reticulum_config ~/.reticulum/config
 
 Public TCP hubs configured by default:
 
-- `reticulum.betweentheborders.com:4242`
 - `rns.beleth.net:4242`
 - `dfw.us.g00n.cloud:6969`
 

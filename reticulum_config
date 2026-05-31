@@ -26,19 +26,6 @@
     target_host = dfw.us.g00n.cloud
     target_port = 6969
 
-  [[RNS Testnet BetweenTheBorders]]
-    type        = TCPClientInterface
-    enabled     = yes
-    target_host = reticulum.betweentheborders.com
-    target_port = 4242
-
-# Dublin DNS doesn't resolve — disabled for now
-#  [[RNS Testnet Dublin]]
-#    type        = TCPClientInterface
-#    enabled     = yes
-#    target_host = dublin.connect.reticulum.network
-#    target_port = 4965
-
 # ── RNode LoRa (Heltec V3 / SX1262) ─────────────────────────────────────────
 # Region: US 915 MHz
 # Serial: /dev/cu.usbserial-0001

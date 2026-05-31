@@ -323,11 +323,6 @@ cat > "$RNS_CONFIG_FILE" << RNSCFG
     target_host = dfw.us.g00n.cloud
     target_port = 6969
 
-  [[RNS Testnet BetweenTheBorders]]
-    type        = TCPClientInterface
-    enabled     = yes
-    target_host = reticulum.betweentheborders.com
-    target_port = 4242
 RNSCFG
 
 log_ok "Reticulum config written → $RNS_CONFIG_FILE"
