@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation
 
 import state
 from shared import (
-    log_info, log_ok, log_warn, log_err, rpc_error_message,
+    is_u64, log_info, log_ok, log_warn, log_err, rpc_error_message,
     BOLD, CYAN, GREEN, YELLOW, RED, RESET, DIM,
     set_quiet,
 )
@@ -270,7 +270,7 @@ def _fetch_balance_sol(pubkey: str) -> float | None:
     lamps = resp["result"]
     if isinstance(lamps, dict):
         lamps = lamps.get("value")
-    if isinstance(lamps, bool) or not isinstance(lamps, int):
+    if not is_u64(lamps):
         return None
     return lamps / 1_000_000_000
 

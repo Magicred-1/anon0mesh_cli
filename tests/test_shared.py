@@ -126,6 +126,16 @@ def test_positive_int_rejects_non_positive_or_invalid_value(value):
         shared.positive_int(value)
 
 
+@pytest.mark.parametrize("value", [0, (1 << 64) - 1])
+def test_is_u64_accepts_bounds(value):
+    assert shared.is_u64(value)
+
+
+@pytest.mark.parametrize("value", [-1, 1 << 64, True, 1.0, "1"])
+def test_is_u64_rejects_out_of_range_or_non_integer_values(value):
+    assert not shared.is_u64(value)
+
+
 # ── private local files ───────────────────────────────────────────────────────
 
 def test_restrict_private_file_permissions_repairs_existing_file(tmp_path):

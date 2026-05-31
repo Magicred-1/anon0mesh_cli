@@ -11,7 +11,7 @@ import concurrent.futures
 
 import state
 from shared import (
-    log_info, log_ok, log_warn, log_err, rpc_error_message,
+    is_u64, log_info, log_ok, log_warn, log_err, rpc_error_message,
     BOLD, CYAN, GREEN, RED, RESET, DIM,
 )
 
@@ -55,7 +55,7 @@ def get_balance(address):
         log_err(f"RPC error: {rpc_error_message(resp['error'])}")
         return
     lamports = _extract_result(resp)
-    if isinstance(lamports, bool) or not isinstance(lamports, int):
+    if not is_u64(lamports):
         log_warn(f"Unexpected getBalance response: {json.dumps(resp)}")
         return
     sol = lamports / 1_000_000_000
@@ -76,7 +76,7 @@ def get_slot():
     if "error" in resp:
         log_err(f"RPC error: {resp['error']}"); return
     val = _extract_result(resp)
-    if isinstance(val, int) and not isinstance(val, bool):
+    if is_u64(val):
         print(f"\n  Current slot: {BOLD}{val:,}{RESET}\n")
     else:
         log_warn(f"Unexpected response: {json.dumps(resp)}")
@@ -89,7 +89,7 @@ def get_block_height():
     if "error" in resp:
         log_err(f"RPC error: {resp['error']}"); return
     val = _extract_result(resp)
-    if isinstance(val, int) and not isinstance(val, bool):
+    if is_u64(val):
         print(f"\n  Block height: {BOLD}{val:,}{RESET}\n")
     else:
         log_warn(f"Unexpected response: {json.dumps(resp)}")
@@ -102,7 +102,7 @@ def get_transaction_count():
     if "error" in resp:
         log_err(f"RPC error: {resp['error']}"); return
     val = _extract_result(resp)
-    if isinstance(val, int) and not isinstance(val, bool):
+    if is_u64(val):
         print(f"\n  Transaction count: {BOLD}{val:,}{RESET}\n")
     else:
         log_warn(f"Unexpected response: {json.dumps(resp)}")
@@ -130,7 +130,7 @@ def _print_sol_balance(sol_resp: dict | None) -> None:
         log_warn("Could not fetch SOL balance")
         return
     lamports = _extract_result(sol_resp)
-    if isinstance(lamports, bool) or not isinstance(lamports, int):
+    if not is_u64(lamports):
         log_warn(f"Unexpected getBalance response: {json.dumps(sol_resp)}")
         return
     sol = lamports / 1_000_000_000
@@ -159,6 +159,7 @@ def _print_spl_tokens(token_resp: dict | None) -> None:
             if (
                 not isinstance(mint, str)
                 or isinstance(decimals, bool) or not isinstance(decimals, int)
+                or not 0 <= decimals <= 255
                 or not isinstance(amount, str)
             ):
                 raise TypeError("unexpected token account field type")

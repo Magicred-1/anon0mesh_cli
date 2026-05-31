@@ -117,6 +117,11 @@ def positive_int(raw_value: str) -> int:
     return value
 
 
+def is_u64(value: Any) -> bool:
+    """Return whether value can be represented as an unsigned Solana u64."""
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 1 << 64
+
+
 # ── Private local files ──────────────────────────────────────────────────────
 
 def restrict_private_file_permissions(path: str) -> None:

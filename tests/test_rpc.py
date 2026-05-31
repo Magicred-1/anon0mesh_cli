@@ -92,6 +92,13 @@ def test_get_balance_malformed_result(mock_pool, capsys):
     assert "Unexpected getBalance response" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("lamports", [-1, 1 << 64])
+def test_get_balance_rejects_out_of_range_lamports(mock_pool, capsys, lamports):
+    mock_pool.call.return_value = {"result": lamports}
+    rpc.get_balance("addr1")
+    assert "Unexpected getBalance response" in capsys.readouterr().out
+
+
 # ── confidential_get_balance ──────────────────────────────────────────────────
 
 def test_confidential_balance_fails_closed_without_relaying_address(monkeypatch, mock_pool, capsys):
@@ -171,6 +178,14 @@ def test_get_transaction_count_malformed_result(mock_pool, capsys):
     assert "Unexpected response" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("query", [rpc.get_slot, rpc.get_block_height, rpc.get_transaction_count])
+@pytest.mark.parametrize("value", [-1, 1 << 64])
+def test_chain_counters_reject_out_of_range_values(mock_pool, capsys, query, value):
+    mock_pool.call.return_value = {"result": value}
+    query()
+    assert "Unexpected response" in capsys.readouterr().out
+
+
 # ── get_recent_blockhash ──────────────────────────────────────────────────────
 
 def test_get_recent_blockhash_ok(mock_pool, capsys):
@@ -204,6 +219,12 @@ def test_print_sol_balance_malformed_result(capsys):
     assert "Unexpected getBalance response" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("lamports", [-1, 1 << 64])
+def test_print_sol_balance_rejects_out_of_range_lamports(capsys, lamports):
+    rpc._print_sol_balance({"result": {"value": lamports}})
+    assert "Unexpected getBalance response" in capsys.readouterr().out
+
+
 def test_print_spl_tokens_malformed_result(capsys):
     rpc._print_spl_tokens({"result": {"value": "not-a-list"}})
     assert "Unexpected getTokenAccountsByOwner response" in capsys.readouterr().out
@@ -211,6 +232,15 @@ def test_print_spl_tokens_malformed_result(capsys):
 
 def test_print_spl_tokens_malformed_nested_account(capsys):
     rpc._print_spl_tokens({"result": {"value": [{"account": {"data": {"parsed": {"info": []}}}}]}})
+    assert "could not parse account" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("decimals", [-1, 256])
+def test_print_spl_tokens_rejects_out_of_range_decimals(capsys, decimals):
+    rpc._print_spl_tokens({"result": {"value": [{"account": {"data": {"parsed": {"info": {
+        "mint": "mint",
+        "tokenAmount": {"decimals": decimals, "uiAmountString": "1"},
+    }}}}}]}})
     assert "could not parse account" in capsys.readouterr().out
 
 

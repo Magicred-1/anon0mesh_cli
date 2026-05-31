@@ -55,6 +55,12 @@ def test_fetch_balance_sol_rejects_malformed_result(monkeypatch):
     assert menu._fetch_balance_sol("address") is None
 
 
+@pytest.mark.parametrize("lamports", [-1, 1 << 64])
+def test_fetch_balance_sol_rejects_out_of_range_lamports(monkeypatch, lamports):
+    monkeypatch.setattr(menu, "rpc_call", lambda *_: {"result": {"value": lamports}})
+    assert menu._fetch_balance_sol("address") is None
+
+
 def test_broadcast_with_retry_accepts_string_signature(monkeypatch, capsys):
     monkeypatch.setattr(menu, "rpc_call", lambda *_: {"result": "signature"})
     menu._broadcast_with_retry("transaction")
