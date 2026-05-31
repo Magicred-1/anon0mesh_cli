@@ -30,7 +30,7 @@ When configured, a Beacon can co-sign and submit an `execute_payment` instructio
 ## Quickstart
 
 ```bash
-git clone https://github.com/Magicred-1/anonmesh_cli.git
+git clone https://github.com/anonmesh/anonmesh_cli.git
 cd anonmesh_cli
 npm install
 chmod +x setup.sh
@@ -47,7 +47,7 @@ chmod +x setup.sh
 ./setup.sh --both            # both
 ./setup.sh --systemd         # also install beacon as a systemd service
 ./setup.sh --ble             # install experimental BLE research deps only
-./setup.sh --meshtastic      # add Meshtastic / LoRa transport
+./setup.sh --meshtastic      # install Meshtastic research deps only
 ./setup.sh --wallet-setup    # generate signing keypair + durable nonce account
 ./setup.sh --mainnet         # target Solana mainnet-beta instead of devnet
 ```
@@ -177,7 +177,7 @@ Public TCP hubs configured by default:
 - `rns.beleth.net:4242`
 - `dfw.us.g00n.cloud:6969`
 
-RNode LoRa and Meshtastic paths are optional. `setup.sh --ble` installs `bleak` for research only; it does not configure a supported desktop BLE relay. Phone BLE uses the separate Android/iOS native client.
+RNode LoRa is optional. `setup.sh --ble` installs `bleak` for research only; it does not configure a supported desktop BLE relay. `setup.sh --meshtastic` installs the Python dependency but requires a separately supplied Reticulum interface module. Phone BLE uses the separate Android/iOS native client.
 
 ## Dependencies
 
@@ -190,7 +190,7 @@ RNode LoRa and Meshtastic paths are optional. `setup.sh --ble` installs `bleak` 
 | `requests` | Solana RPC calls |
 | `solders` | Offline transaction signing (client) |
 | `bleak` | Experimental desktop BLE research dependency |
-| `meshtastic` | LoRa transport (optional) |
+| `meshtastic` | Experimental Meshtastic research dependency |
 | `qrcode` | Wallet QR display (optional) |
 
 ### Node.js (managed by `npm install`)

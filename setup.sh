@@ -6,7 +6,7 @@
 #  Sets up everything needed to run beacon.py and client.py:
 #    · Python venv + all dependencies
 #    · Reticulum config with working public hubs
-#    · Meshtastic interface file (optional)
+#    · Meshtastic research dependency (optional; interface module supplied separately)
 #    · Launcher scripts  (run_beacon.sh / run_client.sh)
 #    · systemd service   (optional, beacon only)
 #
@@ -457,7 +457,7 @@ RNODE
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
-# STEP 5 — Meshtastic interface file
+# STEP 5 — Meshtastic interface module status
 # ═════════════════════════════════════════════════════════════════════════════
 if [[ "$INSTALL_MESHTASTIC" == true ]]; then
   log_step "Meshtastic interface"
@@ -466,13 +466,9 @@ if [[ "$INSTALL_MESHTASTIC" == true ]]; then
   if [[ -f "$MESH_IFACE" ]]; then
     log_info "Meshtastic_Interface.py already present"
   else
-    log_info "Downloading Meshtastic_Interface.py from anon0mesh repo..."
-    if wget -q -O "$MESH_IFACE" \
-      "https://raw.githubusercontent.com/Magicred-1/anon0mesh/main/interfaces/Meshtastic_Interface.py"; then
-      log_ok "Meshtastic_Interface.py downloaded → $MESH_IFACE"
-    else
-      log_warn "Download failed — you can place it manually at $MESH_IFACE"
-    fi
+    log_warn "Meshtastic_Interface.py is not bundled; place a compatible module manually at:"
+    log_info "  $MESH_IFACE"
+    log_info "The Python meshtastic dependency is installed, but no Reticulum interface was configured."
   fi
 fi
 
