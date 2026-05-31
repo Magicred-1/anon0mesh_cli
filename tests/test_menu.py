@@ -1,6 +1,28 @@
 """Focused tests for interactive menu helpers."""
 
+import pytest
+
 import menu
+
+
+@pytest.mark.parametrize("raw", ["not-a-number", "nan", "inf", "-inf", "0", "-1"])
+def test_parse_positive_units_rejects_invalid_amount(raw):
+    assert menu._parse_positive_units(raw, 1_000_000_000) is None
+
+
+def test_parse_positive_units_converts_decimal_amount():
+    assert menu._parse_positive_units("1.5", 1_000_000_000) == 1_500_000_000
+
+
+@pytest.mark.parametrize("raw", ["not-an-int", "-1", str(1 << 32)])
+def test_bounded_env_int_rejects_invalid_value(monkeypatch, raw):
+    monkeypatch.setenv("TEST_OFFSET", raw)
+    assert menu._bounded_env_int("TEST_OFFSET", "1", (1 << 32) - 1) is None
+
+
+def test_bounded_env_int_accepts_valid_value(monkeypatch):
+    monkeypatch.setenv("TEST_OFFSET", "456")
+    assert menu._bounded_env_int("TEST_OFFSET", "1", (1 << 32) - 1) == 456
 
 
 def test_fetch_balance_sol_accepts_wrapped_lamports(monkeypatch):

@@ -41,6 +41,7 @@ _PROMPT_AMOUNT     = "Amount  (SOL, e.g. 0.5)"
 _PROMPT_NONCE_ACCT = "Nonce account pubkey"
 _INVALID_AMOUNT    = "Invalid amount"
 _NO_WALLET         = "No wallet loaded — use WALLET › Generate or Import first"
+_MAX_U32           = (1 << 32) - 1
 
 _W              = 56       # visible width of section fill
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -50,6 +51,29 @@ _spinner_idx    = 0
 # ═══════════════════════════════════════════════════════════════════════════════
 # Input helpers
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _parse_positive_units(raw: str, scale: int) -> int | None:
+    try:
+        amount = int(float(raw) * scale)
+    except (ValueError, OverflowError):
+        log_warn(_INVALID_AMOUNT)
+        return None
+    if amount <= 0:
+        log_warn("Amount must be greater than 0")
+        return None
+    return amount
+
+
+def _bounded_env_int(name: str, default: str, maximum: int) -> int | None:
+    try:
+        value = int(os.getenv(name, default))
+    except ValueError:
+        value = -1
+    if not 0 <= value <= maximum:
+        log_warn(f"Invalid {name}: expected an integer between 0 and {maximum}")
+        return None
+    return value
+
 
 def _ask(prompt: str) -> str:
     try:
@@ -274,12 +298,8 @@ def _do_send_sol():
     if not to: return
     raw = _ask(_PROMPT_AMOUNT)
     if not raw: return
-    try:
-        lamports = int(float(raw) * 1_000_000_000)
-    except ValueError:
-        log_warn(_INVALID_AMOUNT); return
-    if lamports <= 0:
-        log_warn("Amount must be greater than 0"); return
+    lamports = _parse_positive_units(raw, 1_000_000_000)
+    if lamports is None: return
 
     tx_b64 = offline_sign_nonce_transfer(
         kp_path, nonce_pubkey, kp_path, to, lamports, nonce_info["nonce"]
@@ -329,14 +349,11 @@ def _do_arcium_transfer():
     if not mint: return
     raw = _ask("Amount  (token units, e.g. 1.5)")
     if not raw: return
-    try:
-        _WSOL = "So11111111111111111111111111111111111111112"
-        decimals = 9 if mint == _WSOL else int(os.getenv("ARCIUM_TOKEN_DECIMALS", "6"))
-        amount = int(float(raw) * (10 ** decimals))
-    except ValueError:
-        log_warn(_INVALID_AMOUNT); return
-    if amount <= 0:
-        log_warn("Amount must be greater than 0"); return
+    _WSOL = "So11111111111111111111111111111111111111112"
+    decimals = 9 if mint == _WSOL else _bounded_env_int("ARCIUM_TOKEN_DECIMALS", "6", 255)
+    if decimals is None: return
+    amount = _parse_positive_units(raw, 10 ** decimals)
+    if amount is None: return
 
     log_info("Fetching beacon co-signing pubkey…")
     beacon_pk = get_beacon_pubkey()
@@ -345,7 +362,8 @@ def _do_arcium_transfer():
         return
     log_ok(f"Beacon (broadcaster): {beacon_pk}")
 
-    cluster_offset         = int(os.getenv("ARCIUM_CLUSTER_OFFSET", "456"))
+    cluster_offset         = _bounded_env_int("ARCIUM_CLUSTER_OFFSET", "456", _MAX_U32)
+    if cluster_offset is None: return
     broadcaster_ta         = os.getenv("ARCIUM_BROADCASTER_TOKEN_ACCOUNT", "").strip() or None
 
     partial_tx = partial_sign_execute_payment(
@@ -388,10 +406,8 @@ def _do_sign_nonce():
     if not to: return
     raw   = _ask(_PROMPT_AMOUNT)
     if not raw: return
-    try:
-        lamps = int(float(raw) * 1_000_000_000)
-    except ValueError:
-        log_warn(_INVALID_AMOUNT); return
+    lamps = _parse_positive_units(raw, 1_000_000_000)
+    if lamps is None: return
     nval   = _ask("Nonce value  (blank = fetch from chain)")
     tx_b64 = offline_sign_nonce_transfer(kp, nonce, auth or kp, to, lamps, nval or None)
     if tx_b64 and _ask(_RELAY_PROMPT).lower() == "y":
