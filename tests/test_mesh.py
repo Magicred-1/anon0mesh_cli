@@ -930,13 +930,14 @@ class TestBeaconAnnounceHandler:
             handler.received_announce(VALID_HASH_BYTES, None, ANNOUNCE_DATA)
             mock_add.assert_not_called()
 
-    def test_already_known_beacon_skipped(self):
+    def test_already_known_beacon_forwarded_for_identity_refresh(self):
         pool = BeaconPool()
         pool.add(VALID_HASH_HEX, connect=False)
         handler = BeaconAnnounceHandler(pool)
         with patch.object(pool, "add_from_announce") as mock_add:
-            handler.received_announce(VALID_HASH_BYTES, _make_mock_identity(), ANNOUNCE_DATA)
-            mock_add.assert_not_called()
+            ident = _make_mock_identity()
+            handler.received_announce(VALID_HASH_BYTES, ident, ANNOUNCE_DATA)
+            mock_add.assert_called_once_with(VALID_HASH_BYTES, ident, label=f"disc:{VALID_HASH_HEX[:12]}...")
 
     def test_aspect_filter_is_none(self):
         assert BeaconAnnounceHandler.aspect_filter is None

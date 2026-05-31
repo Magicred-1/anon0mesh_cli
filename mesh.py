@@ -533,10 +533,9 @@ class BeaconAnnounceHandler:
         with self.pool._lock:
             already = hash_hex in self.pool._links
         if already:
-            log_info(f"Beacon {short} already in pool — skipping")
-            return
-
-        log_ok(f"Discovered beacon via announce: {short}")
+            log_info(f"Beacon {short} already in pool — refreshing identity")
+        else:
+            log_ok(f"Discovered beacon via announce: {short}")
         self.pool.add_from_announce(destination_hash, announced_identity, label=f"disc:{short}")
 
 
