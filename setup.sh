@@ -726,7 +726,7 @@ if [[ "$INSTALL_CLIENT" == true && "$SETUP_WALLET" == true ]]; then
       else
         WALLET_KEYPAIR_PATH="$SCRIPT_DIR/wallet.json"
         # Generate keypair via Python; pass path through env to avoid heredoc quoting issues
-        ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" python << 'PYEOF'
+        if ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" python << 'PYEOF'
 import os, json
 from solders.keypair import Keypair
 kp   = Keypair()
@@ -738,11 +738,11 @@ with os.fdopen(fd, "w") as f:
 print(f"  Public key : {kp.pubkey()}")
 print(f"  Saved to   : {path}")
 PYEOF
-        if [[ $? -ne 0 ]]; then
-          log_err "Keypair generation failed"; WALLET_KEYPAIR_PATH=""
-        else
+        then
           log_ok "Keypair saved → $WALLET_KEYPAIR_PATH"
           log_warn "Keep wallet.json safe — it contains your private key!"
+        else
+          log_err "Keypair generation failed"; WALLET_KEYPAIR_PATH=""
         fi
       fi
     fi
@@ -751,14 +751,20 @@ PYEOF
     if [[ -n "$WALLET_KEYPAIR_PATH" ]]; then
       chmod 600 "$WALLET_KEYPAIR_PATH" \
         || log_warn "Could not restrict keypair permissions: $WALLET_KEYPAIR_PATH"
-      WALLET_PUBKEY=$(ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" python << 'PYEOF'
+      if ! WALLET_PUBKEY=$(ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" python << 'PYEOF'
 import os, json
 from solders.keypair import Keypair
 with open(os.environ["ANON0MESH_KP_PATH"]) as f:
     kp = Keypair.from_bytes(bytes(json.load(f)))
 print(kp.pubkey(), end="")
 PYEOF
-)
+      ); then
+        log_err "Could not load keypair: $WALLET_KEYPAIR_PATH — skipping wallet setup"
+        WALLET_KEYPAIR_PATH=""
+      fi
+    fi
+
+    if [[ -n "$WALLET_KEYPAIR_PATH" ]]; then
       log_ok "Wallet public key: $WALLET_PUBKEY"
       echo ""
       if [[ "$SOLANA_NETWORK" == "devnet" ]]; then
@@ -794,7 +800,7 @@ PYEOF
         # Run Python once.
         # Status/progress messages  → stderr  (shown directly to the user)
         # KEY=VALUE result lines    → stdout  (captured into _nonce_out)
-        _nonce_out=$(
+        if _nonce_out=$(
           ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" \
           ANON0MESH_RPC="$_SETUP_RPC" \
           ANON0MESH_DIR="$SCRIPT_DIR" \
@@ -907,8 +913,11 @@ except Exception as exc:
         pass
     sys.exit(1)
 PYEOF
-        )
-        _nonce_exit=$?
+        ); then
+          _nonce_exit=0
+        else
+          _nonce_exit=$?
+        fi
 
         if [[ $_nonce_exit -eq 0 ]]; then
           while IFS='=' read -r key val; do
