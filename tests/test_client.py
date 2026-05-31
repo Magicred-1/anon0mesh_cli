@@ -5,6 +5,7 @@ import importlib.util
 import sys
 import types
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -55,3 +56,35 @@ def test_timeout_accepts_positive_integer(client_module):
 def test_timeout_rejects_non_positive_or_invalid_integer(client_module, value):
     with pytest.raises(SystemExit):
         client_module._build_parser().parse_args(["--timeout", value])
+
+
+def test_setup_beacons_waits_for_discovery_after_explicit_connect_failure(monkeypatch, client_module):
+    pool = MagicMock()
+    pool.active_links.return_value = []
+    pool.status_table.return_value = ""
+    wait = MagicMock()
+    monkeypatch.setattr(client_module.state, "pool", pool)
+    monkeypatch.setattr(client_module, "BeaconAnnounceHandler", MagicMock(return_value=object()))
+    monkeypatch.setattr(client_module, "_connect_beacons", MagicMock())
+    monkeypatch.setattr(client_module, "_wait_for_discover_beacon", wait)
+    args = types.SimpleNamespace(discover=True, beacon=["a" * 32])
+
+    client_module._setup_beacons(args, one_shot=True)
+
+    wait.assert_called_once_with()
+
+
+def test_setup_beacons_skips_discovery_wait_when_explicit_link_is_active(monkeypatch, client_module):
+    pool = MagicMock()
+    pool.active_links.return_value = [object()]
+    pool.status_table.return_value = ""
+    wait = MagicMock()
+    monkeypatch.setattr(client_module.state, "pool", pool)
+    monkeypatch.setattr(client_module, "BeaconAnnounceHandler", MagicMock(return_value=object()))
+    monkeypatch.setattr(client_module, "_connect_beacons", MagicMock())
+    monkeypatch.setattr(client_module, "_wait_for_discover_beacon", wait)
+    args = types.SimpleNamespace(discover=True, beacon=["a" * 32])
+
+    client_module._setup_beacons(args, one_shot=True)
+
+    wait.assert_not_called()

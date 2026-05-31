@@ -143,7 +143,7 @@ def _setup_beacons(args, one_shot: bool) -> None:
     if args.beacon:
         _connect_beacons(args, one_shot)
 
-    if one_shot and args.discover and not args.beacon:
+    if one_shot and args.discover and not state.pool.active_links():
         _wait_for_discover_beacon()
 
     if one_shot:
