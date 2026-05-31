@@ -12,14 +12,25 @@ CONFIG_DIR="${ANONMESH_CONFIG_DIR:-$HOME/.reticulum}"
 NETWORK="${ANONMESH_NETWORK:-devnet}"
 
 ensure_state_dir() {
-  mkdir -p "$STATE_DIR"
-  chmod 700 "$STATE_DIR"
-  if [[ -L "$PID_FILE" || -L "$LOG_FILE" ]]; then
-    echo "refusing symlinked headless-node state file in $STATE_DIR" >&2
+  if [[ -L "$STATE_DIR" ]]; then
+    echo "refusing unsafe headless-node state path: $STATE_DIR" >&2
     exit 1
   fi
-  [[ ! -f "$PID_FILE" ]] || chmod 600 "$PID_FILE"
-  [[ ! -f "$LOG_FILE" ]] || chmod 600 "$LOG_FILE"
+  mkdir -p "$STATE_DIR"
+  if [[ ! -d "$STATE_DIR" || -L "$STATE_DIR" ]]; then
+    echo "refusing unsafe headless-node state path: $STATE_DIR" >&2
+    exit 1
+  fi
+  chmod 700 "$STATE_DIR"
+  for state_file in "$PID_FILE" "$LOG_FILE"; do
+    if [[ -e "$state_file" || -L "$state_file" ]]; then
+      if [[ ! -f "$state_file" || -L "$state_file" ]]; then
+        echo "refusing unsafe headless-node state file: $state_file" >&2
+        exit 1
+      fi
+      chmod 600 "$state_file"
+    fi
+  done
 }
 
 ensure_state_dir

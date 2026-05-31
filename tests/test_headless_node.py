@@ -75,8 +75,48 @@ def test_launcher_refuses_symlinked_state_file(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "refusing symlinked headless-node state file" in result.stderr
+    assert "refusing unsafe headless-node state file" in result.stderr
     assert target.read_text() == "keep"
+
+
+def test_launcher_refuses_fifo_state_file(tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    os.mkfifo(state_dir / "headless-node.log")
+    env = {**os.environ, "ANONMESH_STATE_DIR": str(state_dir)}
+
+    result = subprocess.run(
+        [str(LAUNCHER), "status"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=3,
+    )
+
+    assert result.returncode == 1
+    assert "refusing unsafe headless-node state file" in result.stderr
+
+
+def test_launcher_refuses_symlinked_state_directory_without_chmod_target(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    target.chmod(0o777)
+    state_dir = tmp_path / "state"
+    state_dir.symlink_to(target, target_is_directory=True)
+    env = {**os.environ, "ANONMESH_STATE_DIR": str(state_dir)}
+
+    result = subprocess.run(
+        [str(LAUNCHER), "status"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert "refusing unsafe headless-node state path" in result.stderr
+    assert stat.S_IMODE(target.stat().st_mode) == 0o777
 
 
 def test_stop_clears_stale_pid_without_signalling_unrelated_process(tmp_path):
