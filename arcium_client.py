@@ -304,8 +304,11 @@ class ArciumBeaconClient:
             # shim_args contains payerKeypairHex — pass via stdin to keep it
             # out of the process argument list (/proc/<pid>/cmdline / ps aux)
             result = _run_shim("execute_payment", stdin_data=shim_args, timeout=60)
-            log_ok(f"Payment stats logged  sig={result['signature'][:20]}...")
-            return {"status": "ok", "signature": result["signature"]}
+            signature = result.get("signature")
+            if not isinstance(signature, str) or not signature:
+                raise ValueError("shim execute_payment returned an invalid signature")
+            log_ok(f"Payment stats logged  sig={signature[:20]}...")
+            return {"status": "ok", "signature": signature}
         except Exception as exc:
             error = redact_urls(str(exc))
             log_err(f"execute_payment failed: {error}")

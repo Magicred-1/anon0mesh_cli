@@ -340,6 +340,26 @@ def test_log_payment_stats_redacts_shim_error(mock_shim, capsys):
     assert "secret" not in result["message"]
 
 
+@pytest.mark.parametrize("signature", [None, "", [], True])
+@patch("arcium_client._run_shim")
+def test_log_payment_stats_rejects_invalid_shim_signature(mock_shim, signature):
+    mock_shim.return_value = {"signature": signature}
+    client = object.__new__(arcium_client.ArciumBeaconClient)
+    client.rpc_url = "https://rpc.example.test"
+    client.program_id = arcium_client.MXE_PROGRAM_ID
+    client._payer_hex = "00"
+    client._payer_b58 = "payer"
+    client.mxe_pubkey_hex = "mxe"
+    client.cluster_offset = 456
+
+    result = asyncio.run(client.log_payment_stats(1, "payer-ta", "recipient", "recipient-ta", "mint"))
+
+    assert result == {
+        "status": "error",
+        "message": "shim execute_payment returned an invalid signature",
+    }
+
+
 # ── ArciumBeacon (disabled path) ──────────────────────────────────────────────
 
 def test_arcium_beacon_disabled_when_env_not_set(monkeypatch):
