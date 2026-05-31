@@ -6,6 +6,7 @@ Requires: pip install solders
 import json
 import base64
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 import pytest
 import state
@@ -19,12 +20,29 @@ from solders.keypair import Keypair
 
 # A known valid base58 Hash string (all 1s — the default/zero hash)
 ZERO_HASH = "11111111111111111111111111111111"
+MXE_PUBKEY_HEX = "00" * 32
 
 
 def _write_keypair(path: Path) -> Keypair:
     kp = Keypair()
     path.write_text(json.dumps(list(bytes(kp))))
     return kp
+
+
+def _arcium_accounts() -> dict[str, str]:
+    return {
+        name: str(Keypair().pubkey())
+        for name in (
+            "mxeAccount",
+            "compDefAccount",
+            "mempoolAccount",
+            "executingPool",
+            "computationAccount",
+            "clusterAccount",
+            "poolAccount",
+            "clockAccount",
+        )
+    }
 
 
 # ── generate_wallet ───────────────────────────────────────────────────────────
@@ -282,11 +300,21 @@ def test_offline_sign_nonce_transfer_zero_lamports_still_signs(tmp_path):
 
 # ── partial_sign_execute_payment ──────────────────────────────────────────────
 
-def test_partial_sign_execute_payment_returns_base64(tmp_path):
+@patch("wallet._account_exists", return_value=True)
+@patch("arcium_client._run_shim")
+@patch("arcium_client.rescue_encrypt")
+def test_partial_sign_execute_payment_returns_base64(mock_encrypt, mock_shim, _mock_exists, tmp_path):
     payer   = _write_keypair(tmp_path / "payer.json")
     beacon  = Keypair()
     to      = Keypair()
     nonce   = Keypair()
+    mint    = Keypair()
+    mock_encrypt.return_value = {
+        "ciphertexts": [[0] * 32],
+        "pubkey_hex": "00" * 32,
+        "nonce_bn": "0",
+    }
+    mock_shim.return_value = _arcium_accounts()
 
     tx = wallet.partial_sign_execute_payment(
         str(tmp_path / "payer.json"),
@@ -294,7 +322,9 @@ def test_partial_sign_execute_payment_returns_base64(tmp_path):
         str(nonce.pubkey()),
         str(to.pubkey()),
         500_000,
-        ZERO_HASH,
+        MXE_PUBKEY_HEX,
+        str(mint.pubkey()),
+        nonce_value=ZERO_HASH,
     )
     assert tx is not None
     decoded = base64.b64decode(tx)
@@ -308,7 +338,8 @@ def test_partial_sign_execute_payment_missing_keypair(tmp_path, capsys):
         str(Keypair().pubkey()),
         str(Keypair().pubkey()),
         1_000,
-        ZERO_HASH,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
     )
     assert result is None
     assert "Failed to load" in capsys.readouterr().out
@@ -322,7 +353,8 @@ def test_partial_sign_execute_payment_invalid_address(tmp_path, capsys):
         "also-invalid",
         "still-invalid",
         1_000,
-        ZERO_HASH,
+        MXE_PUBKEY_HEX,
+        "invalid-mint",
     )
     assert result is None
     assert "Invalid address" in capsys.readouterr().out
@@ -330,24 +362,25 @@ def test_partial_sign_execute_payment_invalid_address(tmp_path, capsys):
 
 # ── create_nonce_account (instruction build) ──────────────────────────────────
 
-def test_create_nonce_account_authority_param_name(tmp_path, monkeypatch):
+def test_create_nonce_account_authority_param_name(tmp_path):
     """
     Regression: InitializeNonceAccountParams uses 'authority', not 'authorized_pubkey'.
     Mock out RPC calls and verify the instruction builds without ValueError.
     """
-    from unittest.mock import patch, MagicMock
     _write_keypair(tmp_path / "payer.json")
+    _write_keypair(tmp_path / "nonce.json")
 
-    mock_rpc = MagicMock()
-    mock_rpc.return_value = {"result": 1_447_680}          # rent
     mock_blockhash = MagicMock(return_value="4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi")
-    mock_send = MagicMock(return_value={"result": "SIG"})
 
-    with patch("wallet.rpc_call", mock_rpc), \
-         patch("wallet.get_recent_blockhash", mock_blockhash), \
-         patch("wallet.rpc_call", mock_send):
+    with patch("rpc.rpc_call", side_effect=[{"result": 1_447_680}, {"result": "SIG"}]), \
+         patch("rpc.get_recent_blockhash", mock_blockhash):
         # The call must not raise ValueError: Missing required key: authority
         try:
-            wallet.create_nonce_account(str(tmp_path / "payer.json"), None, None)
+            result = wallet.create_nonce_account(
+                str(tmp_path / "payer.json"),
+                str(tmp_path / "nonce.json"),
+                None,
+            )
         except ValueError as e:
             pytest.fail(f"InitializeNonceAccountParams raised ValueError: {e}")
+    assert result is not None

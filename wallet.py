@@ -337,14 +337,18 @@ def partial_sign_execute_payment(
         log_err(f"Failed to load keypair: {exc}")
         return None
 
-    payer_pubkey  = payer.pubkey()
-    beacon_pubkey = Pubkey.from_string(beacon_pubkey_str)
-    nonce_pubkey  = Pubkey.from_string(nonce_account_str)
-    prog_pubkey   = Pubkey.from_string(program_id_str)
-    mint_pubkey   = Pubkey.from_string(mint_str)
-    recipient_pk  = Pubkey.from_string(recipient_str)
-    # Treasury defaults to beacon/operator if not explicitly provided
-    treasury_pk   = Pubkey.from_string(treasury_str) if treasury_str else beacon_pubkey
+    payer_pubkey = payer.pubkey()
+    try:
+        beacon_pubkey = Pubkey.from_string(beacon_pubkey_str)
+        nonce_pubkey  = Pubkey.from_string(nonce_account_str)
+        prog_pubkey   = Pubkey.from_string(program_id_str)
+        mint_pubkey   = Pubkey.from_string(mint_str)
+        recipient_pk  = Pubkey.from_string(recipient_str)
+        # Treasury defaults to beacon/operator if not explicitly provided
+        treasury_pk = Pubkey.from_string(treasury_str) if treasury_str else beacon_pubkey
+    except ValueError as exc:
+        log_err(f"Invalid address: {exc}")
+        return None
 
     # Random u64 computation offset — uniquely identifies this Arcium computation
     comp_offset = int.from_bytes(_secrets.token_bytes(8), "little")
