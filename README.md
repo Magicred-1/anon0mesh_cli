@@ -217,8 +217,8 @@ Transactions sent over the mesh can be delayed by minutes or hours. A [durable n
 `setup.sh --wallet-setup` is intentionally interactive. It generates a signing
 keypair and can create a nonce account on your behalf after confirmation
 (~0.00145 SOL rent-exempt deposit, recoverable). Review the prompts before using
-it with a funded wallet. Generated wallet and nonce keypair JSON files are
-written with owner-only `0600` permissions.
+it with a funded wallet. Generated and reused wallet keypair JSON files, plus
+generated nonce keypair files, are restricted to owner-only `0600` permissions.
 
 The client partially signs the transaction (payer slot); the beacon co-signs (broadcaster slot) before submitting to Solana.
 

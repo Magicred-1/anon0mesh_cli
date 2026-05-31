@@ -215,6 +215,15 @@ def test_auto_load_finds_wallet_json(tmp_path, monkeypatch):
     assert "wallet.json" in state.active_wallet["path"]
 
 
+def test_auto_load_repairs_legacy_wallet_permissions(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "wallet.json"
+    path.write_text(json.dumps(list(bytes(Keypair()))))
+    path.chmod(0o666)
+    wallet.auto_load_wallet()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 def test_auto_load_finds_wallet_prefix(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     kp = Keypair()

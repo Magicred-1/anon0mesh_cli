@@ -736,6 +736,8 @@ PYEOF
 
     # ── Show public key + funding instructions ────────────────────────────────
     if [[ -n "$WALLET_KEYPAIR_PATH" ]]; then
+      chmod 600 "$WALLET_KEYPAIR_PATH" \
+        || log_warn "Could not restrict keypair permissions: $WALLET_KEYPAIR_PATH"
       WALLET_PUBKEY=$(ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" python << 'PYEOF'
 import os, json
 from solders.keypair import Keypair

@@ -11,6 +11,7 @@ import json
 import base64
 import hashlib
 import secrets as _secrets
+import stat
 from pathlib import Path
 
 import state
@@ -55,6 +56,16 @@ def _save_private_keypair(path: str, keypair: "Keypair") -> None:
             os.close(fd)
 
 
+def _restrict_private_keypair_permissions(path: str | Path) -> None:
+    """Repair legacy local keypair files created with permissive modes."""
+    try:
+        if stat.S_IMODE(os.stat(path).st_mode) != 0o600:
+            os.chmod(path, 0o600)
+            log_warn(f"Restricted keypair permissions to 0600: {path}")
+    except OSError as exc:
+        log_warn(f"Could not restrict keypair permissions for {path}: {exc}")
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Auto-detection
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -88,6 +99,7 @@ def auto_load_wallet() -> None:
             with open(path) as f:
                 kp = Keypair.from_bytes(bytes(json.load(f)))
             pubkey = str(kp.pubkey())
+            _restrict_private_keypair_permissions(path)
             state.active_wallet = {"pubkey": pubkey, "path": str(path)}
             log_ok(f"Wallet loaded: {pubkey}  ({path})")
             return
