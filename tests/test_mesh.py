@@ -48,6 +48,7 @@ def _make_mock_identity():
 def _make_established_link(bl: BeaconLink):
     """Simulate a link being established on a BeaconLink."""
     mock_link = MagicMock()
+    bl._pending_link = mock_link
     bl._on_established(mock_link)
     return mock_link
 
@@ -128,6 +129,7 @@ class TestBeaconLinkLifecycle:
     def test_on_established_sets_active(self):
         bl = BeaconLink(VALID_HASH_HEX)
         mock_link = MagicMock()
+        bl._pending_link = mock_link
         _state.identify_self = False
         bl._on_established(mock_link)
 
@@ -141,12 +143,35 @@ class TestBeaconLinkLifecycle:
     def test_on_established_identifies_when_configured(self):
         bl = BeaconLink(VALID_HASH_HEX)
         mock_link = MagicMock()
+        bl._pending_link = mock_link
         fake_id = _make_mock_identity()
         _state.identify_self = True
         _state.client_identity = fake_id
         bl._on_established(mock_link)
 
         mock_link.identify.assert_called_once_with(fake_id)
+
+    def test_on_established_rejects_superseded_link(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        stale_link = MagicMock()
+        current_link = _make_established_link(bl)
+
+        bl._on_established(stale_link)
+
+        assert bl.active is True
+        assert bl.link is current_link
+        assert bl.ready.is_set()
+        stale_link.teardown.assert_called_once()
+
+    def test_on_established_duplicate_current_link_is_noop(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        current_link = _make_established_link(bl)
+
+        bl._on_established(current_link)
+
+        assert bl.active is True
+        assert bl.link is current_link
+        current_link.teardown.assert_not_called()
 
     def test_on_closed_clears_active_and_ready(self):
         bl = BeaconLink(VALID_HASH_HEX)
@@ -197,7 +222,20 @@ class TestBeaconLinkLifecycle:
 
         assert bl._removed is True
         assert bl.active is False
+        assert not bl.ready.is_set()
         mock_link.teardown.assert_called_once()
+
+    def test_teardown_cancels_pending_link(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        pending_link = MagicMock()
+        bl._pending_link = pending_link
+        bl.ready.set()
+
+        bl.teardown()
+
+        assert bl._pending_link is None
+        assert not bl.ready.is_set()
+        pending_link.teardown.assert_called_once()
 
     def test_teardown_tolerates_no_link(self):
         bl = BeaconLink(VALID_HASH_HEX)
@@ -264,16 +302,29 @@ class TestBeaconLinkConnect:
 
         assert result is False
 
+    def test_connect_after_removal_does_not_request_path(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        bl.teardown()
+
+        with patch.object(_mock_RNS.Transport, "has_path") as has_path:
+            result = bl.connect(timeout=0.3)
+
+        assert result is False
+        has_path.assert_not_called()
+
     def test_connect_link_establishment_timeout(self):
         bl = BeaconLink(VALID_HASH_HEX)
         _mock_RNS.Transport.has_path.return_value = True
         _mock_RNS.Identity.recall.return_value = _make_mock_identity()
         # Don't trigger the established callback → times out
-        _mock_RNS.Link.return_value = MagicMock()
+        mock_link_instance = MagicMock()
+        _mock_RNS.Link.return_value = mock_link_instance
 
         result = bl.connect(timeout=0.3)
 
         assert result is False
+        assert bl._pending_link is None
+        mock_link_instance.teardown.assert_called_once()
 
     def test_connect_with_identity_fast_path(self):
         bl = BeaconLink(VALID_HASH_HEX)
@@ -293,11 +344,52 @@ class TestBeaconLinkConnect:
 
     def test_connect_with_identity_timeout(self):
         bl = BeaconLink(VALID_HASH_HEX)
-        _mock_RNS.Link.return_value = MagicMock()
+        mock_link_instance = MagicMock()
+        _mock_RNS.Link.return_value = mock_link_instance
 
         result = bl.connect_with_identity(_make_mock_identity(), timeout=0.3)
 
         assert result is False
+        assert bl._pending_link is None
+        mock_link_instance.teardown.assert_called_once()
+
+    def test_connect_with_identity_after_removal_tears_down_attempt(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        mock_link_instance = MagicMock()
+        _mock_RNS.Link.return_value = mock_link_instance
+        bl.teardown()
+
+        result = bl.connect_with_identity(_make_mock_identity(), timeout=0.3)
+
+        assert result is False
+        assert bl._pending_link is None
+        mock_link_instance.teardown.assert_called_once()
+        mock_link_instance.set_link_established_callback.assert_not_called()
+
+    def test_start_link_attempt_tears_down_superseded_attempt(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        stale_link = MagicMock()
+        replacement_link = MagicMock()
+        bl._pending_link = stale_link
+        bl.ready.set()
+
+        assert bl._start_link_attempt(replacement_link) is True
+
+        assert bl._pending_link is replacement_link
+        assert not bl.ready.is_set()
+        stale_link.teardown.assert_called_once()
+
+    def test_start_link_attempt_preserves_link_that_already_won_race(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        current_link = _make_established_link(bl)
+        replacement_link = MagicMock()
+
+        assert bl._start_link_attempt(replacement_link) is False
+
+        assert bl.active is True
+        assert bl.link is current_link
+        assert bl.ready.is_set()
+        replacement_link.teardown.assert_called_once()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -563,6 +655,16 @@ class TestBeaconPoolAddRemove:
         with patch.object(bl, "teardown") as mock_td:
             pool.remove(VALID_HASH_HEX)
             mock_td.assert_called_once()
+
+    def test_discard_if_current_preserves_replacement(self):
+        pool = BeaconPool()
+        stale_link = BeaconLink(VALID_HASH_HEX)
+        replacement_link = BeaconLink(VALID_HASH_HEX)
+        pool._links[VALID_HASH_HEX] = replacement_link
+
+        pool._discard_if_current(VALID_HASH_HEX, stale_link)
+
+        assert pool.all_links() == [replacement_link]
 
 
 # ═════════════════════════════════════════════════════════════════════════════

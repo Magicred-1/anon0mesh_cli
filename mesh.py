@@ -92,6 +92,7 @@ class BeaconLink:
         self.dest_hash      = bytes.fromhex(self.dest_hash_hex)
         self.label          = label or self.dest_hash_hex[:12] + "..."
         self.link: Optional[RNS.Link] = None
+        self._pending_link: Optional[RNS.Link] = None
         self.ready          = threading.Event()
         self.active         = False
         self._lock          = threading.Lock()
@@ -102,10 +103,23 @@ class BeaconLink:
 
     def _on_established(self, link):
         with self._lock:
-            self.link          = link
-            self.active        = True
-            self._reconnecting = False
-            self._retry_count  = 0
+            if link is self.link and self.active:
+                return
+            if self._removed or link is not self._pending_link:
+                accepted = False
+            else:
+                accepted            = True
+                self._pending_link   = None
+                self.link            = link
+                self.active          = True
+                self._reconnecting   = False
+                self._retry_count    = 0
+        if not accepted:
+            try:
+                link.teardown()
+            except Exception:
+                pass
+            return
         log_ok(f"[{self.label}] Link established")
         if state.identify_self and state.client_identity:
             link.identify(state.client_identity)
@@ -164,11 +178,15 @@ class BeaconLink:
             log_warn(f"[{self.label}] Reconnect attempt {self._retry_count} failed")
 
     def connect(self, timeout: float = 20.0) -> bool:
+        if self._is_removed():
+            return False
         if not RNS.Transport.has_path(self.dest_hash):
             log_info(f"[{self.label}] Requesting path from mesh...")
             RNS.Transport.request_path(self.dest_hash)
             deadline = time.time() + timeout
             while not RNS.Transport.has_path(self.dest_hash):
+                if self._is_removed():
+                    return False
                 if time.time() > deadline:
                     log_err(f"[{self.label}] Path resolution timed out")
                     return False
@@ -192,12 +210,16 @@ class BeaconLink:
             APP_ASPECT,
         )
         link = RNS.Link(dest)
+        if not self._start_link_attempt(link):
+            with self._lock:
+                return self.active and not self._removed
         link.set_link_established_callback(self._on_established)
 
-        if not self.ready.wait(timeout=timeout):
-            log_err(f"[{self.label}] Link establishment timed out")
-            return False
-        return True
+        return self._wait_for_link(link, timeout, "Link establishment timed out")
+
+    def _is_removed(self) -> bool:
+        with self._lock:
+            return self._removed
 
     def connect_with_identity(self, identity: "RNS.Identity", timeout: float = 20.0) -> bool:
         with self._lock:
@@ -211,11 +233,48 @@ class BeaconLink:
             APP_ASPECT,
         )
         link = RNS.Link(dest)
+        if not self._start_link_attempt(link):
+            with self._lock:
+                return self.active and not self._removed
         link.set_link_established_callback(self._on_established)
-        if not self.ready.wait(timeout=timeout):
-            log_err(f"[{self.label}] Link establishment timed out (identity fast-path)")
+        return self._wait_for_link(link, timeout, "Link establishment timed out (identity fast-path)")
+
+    def _start_link_attempt(self, link) -> bool:
+        with self._lock:
+            removed = self._removed
+            already_active = self.active
+            superseded = self._pending_link
+            if not removed and not already_active:
+                self.ready.clear()
+                self._pending_link = link
+        if superseded is not None and superseded is not link:
+            try:
+                superseded.teardown()
+            except Exception:
+                pass
+        if removed or already_active:
+            try:
+                link.teardown()
+            except Exception:
+                pass
             return False
         return True
+
+    def _wait_for_link(self, link, timeout: float, timeout_message: str) -> bool:
+        established = self.ready.wait(timeout=timeout)
+        with self._lock:
+            accepted = self.active and self.link is link
+            if self._pending_link is link:
+                self._pending_link = None
+        if accepted:
+            return True
+        try:
+            link.teardown()
+        except Exception:
+            pass
+        if not established:
+            log_err(f"[{self.label}] {timeout_message}")
+        return False
 
     def refresh_identity(self, identity: "RNS.Identity") -> None:
         with self._lock:
@@ -264,9 +323,17 @@ class BeaconLink:
 
     def teardown(self):
         with self._lock:
-            self._removed = True
-            self.active   = False
-            link          = self.link
+            self._removed      = True
+            self.active        = False
+            link               = self.link
+            pending_link       = self._pending_link
+            self._pending_link = None
+        self.ready.clear()
+        if pending_link is not None and pending_link is not link:
+            try:
+                pending_link.teardown()
+            except Exception:
+                pass
         if link:
             try:
                 link.teardown()
@@ -298,19 +365,16 @@ class BeaconPool:
         with self._lock:
             if dest_hash_hex in self._links:
                 return
-            self._pending_count += 1
-
-        bl = BeaconLink(dest_hash_hex, label or dest_hash_hex[:12] + "...")
-        with self._lock:
+            bl = BeaconLink(dest_hash_hex, label or dest_hash_hex[:12] + "...")
             self._links[dest_hash_hex] = bl
+            self._pending_count += 1
 
         def _connect():
             ok = bl.connect(timeout=25.0)
             with self._lock:
                 self._pending_count = max(0, self._pending_count - 1)
             if not ok:
-                with self._lock:
-                    self._links.pop(dest_hash_hex, None)
+                self._discard_if_current(dest_hash_hex, bl)
 
         threading.Thread(target=_connect, daemon=True).start()
 
@@ -325,14 +389,12 @@ class BeaconPool:
         with self._lock:
             if dest_hash_hex in self._links:
                 return True
-        bl = BeaconLink(dest_hash_hex, label)
-        with self._lock:
+            bl = BeaconLink(dest_hash_hex, label)
             self._links[dest_hash_hex] = bl
         if connect:
             ok = bl.connect(timeout=20.0)
             if not ok:
-                with self._lock:
-                    del self._links[dest_hash_hex]
+                self._discard_if_current(dest_hash_hex, bl)
             return ok
         return True
 
@@ -341,22 +403,20 @@ class BeaconPool:
 
         with self._lock:
             existing = self._links.get(dest_hash_hex)
+            if existing is None:
+                bl = BeaconLink(dest_hash_hex, label or dest_hash_hex[:12] + "...")
+                self._links[dest_hash_hex] = bl
 
         if existing is not None:
             existing.refresh_identity(identity)
             return
-
-        bl = BeaconLink(dest_hash_hex, label or dest_hash_hex[:12] + "...")
-        with self._lock:
-            self._links[dest_hash_hex] = bl
 
         def _open():
             ok = bl.connect_with_identity(identity, timeout=20.0)
             if ok:
                 log_ok(f"[{bl.label}] Auto-connected via announce ({self.size()} in pool)")
             else:
-                with self._lock:
-                    self._links.pop(dest_hash_hex, None)
+                self._discard_if_current(dest_hash_hex, bl)
 
         threading.Thread(target=_open, daemon=True).start()
 
@@ -377,7 +437,13 @@ class BeaconPool:
             return list(self._links.values())
 
     def size(self) -> int:
-        return len(self._links)
+        with self._lock:
+            return len(self._links)
+
+    def _discard_if_current(self, dest_hash_hex: str, link: BeaconLink) -> None:
+        with self._lock:
+            if self._links.get(dest_hash_hex) is link:
+                self._links.pop(dest_hash_hex, None)
 
     def teardown_all(self) -> None:
         with self._lock:
