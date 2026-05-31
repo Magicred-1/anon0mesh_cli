@@ -15,7 +15,7 @@ import threading
 
 import state
 from shared import (
-    log_info, log_ok, log_warn, log_err,
+    log_info, log_ok, log_warn, log_err, rpc_error_message,
     BOLD, CYAN, GREEN, YELLOW, RED, RESET, DIM,
     set_quiet,
 )
@@ -294,11 +294,13 @@ def _broadcast_with_retry(tx_b64: str) -> None:
             if attempt > 1:
                 sp.tick(f"Retry {attempt}/{_MAX_RETRIES}…")
             resp = rpc_call("sendTransaction", [tx_b64, {"encoding": "base64"}])
-            if resp and "result" in resp:
-                sp.done(f"Confirmed  sig: {resp['result'][:20]}…")
-                print(f"\n  {GREEN}{BOLD}Signature:{RESET} {resp['result']}\n")
+            signature = resp.get("result") if isinstance(resp, dict) else None
+            if isinstance(signature, str) and signature:
+                sp.done(f"Confirmed  sig: {signature[:20]}…")
+                print(f"\n  {GREEN}{BOLD}Signature:{RESET} {signature}\n")
                 return
-            err = resp.get("error", {}).get("message", "no response") if resp else "no response"
+            error = resp.get("error") if isinstance(resp, dict) else None
+            err = rpc_error_message(error, default="no response")
             sp.tick(f"Attempt {attempt} failed: {err[:50]}")
         sp.done("All broadcast attempts failed", ok=False)
 
