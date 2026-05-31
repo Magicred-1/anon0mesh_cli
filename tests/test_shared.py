@@ -3,7 +3,9 @@ tests/test_shared.py — unit tests for shared.py
 """
 
 import json
+import stat
 import zlib
+from pathlib import Path
 
 import pytest
 
@@ -109,6 +111,27 @@ def test_rpc_error_message_extracts_object_message():
 
 def test_rpc_error_message_accepts_scalar_error():
     assert shared.rpc_error_message("busy") == "busy"
+
+
+# ── private local files ───────────────────────────────────────────────────────
+
+def test_restrict_private_file_permissions_repairs_existing_file(tmp_path):
+    path = tmp_path / "identity"
+    path.write_text("secret")
+    path.chmod(0o666)
+    shared.restrict_private_file_permissions(str(path))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_save_private_identity_uses_owner_only_permissions(tmp_path):
+    path = tmp_path / "identity"
+
+    class FakeIdentity:
+        def to_file(self, output_path):
+            Path(output_path).write_text("secret")
+
+    shared.save_private_identity(FakeIdentity(), str(path))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 # ── response compression ──────────────────────────────────────────────────────

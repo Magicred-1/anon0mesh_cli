@@ -80,6 +80,7 @@ from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT,
     decode_json, build_response, compress_response, redact_url, rpc_error_message,
+    restrict_private_file_permissions, save_private_identity,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
     BOLD, CYAN, GREEN, RESET, DIM,
 )
@@ -502,16 +503,17 @@ def _init_reticulum(config_path: str | None) -> None:
     else:
         log_ok("Reticulum started  (Transport identity ready)")
 
-    identity_path = os.path.join(
-        config_path or os.path.expanduser("~/.reticulum"),
-        "anonmesh_beacon_identity",
-    )
+    identity_dir = config_path or os.path.expanduser("~/.reticulum")
+    restrict_private_file_permissions(
+        os.path.join(identity_dir, "storage", "transport_identity"))
+    identity_path = os.path.join(identity_dir, "anonmesh_beacon_identity")
     if os.path.isfile(identity_path):
         beacon_identity = RNS.Identity.from_file(identity_path)
+        restrict_private_file_permissions(identity_path)
         log_info("Loaded persisted beacon identity")
     else:
         beacon_identity = RNS.Identity()
-        beacon_identity.to_file(identity_path)
+        save_private_identity(beacon_identity, identity_path)
         log_ok("Generated new beacon identity (saved)")
 
 

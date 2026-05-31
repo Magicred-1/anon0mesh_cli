@@ -5,6 +5,7 @@ mesh.py — Reticulum network layer
 BeaconLink, BeaconPool, BeaconAnnounceHandler, and startup helpers.
 """
 
+import os
 import time
 import threading
 from typing import Optional
@@ -36,6 +37,7 @@ import state
 from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     RNS_REQUEST_TIMEOUT, build_rpc, decode_json, decompress_response,
+    restrict_private_file_permissions,
     log_info, log_ok, log_warn, log_err,
     BOLD, GREEN, RED, RESET, DIM,
 )
@@ -477,6 +479,9 @@ class BeaconAnnounceHandler:
 
 def start_reticulum(config_path) -> None:
     RNS.Reticulum(config_path)
+    identity_dir = config_path or os.path.expanduser("~/.reticulum")
+    restrict_private_file_permissions(
+        os.path.join(identity_dir, "storage", "transport_identity"))
     deadline = time.time() + 5.0
     while RNS.Transport.identity is None and time.time() < deadline:
         time.sleep(0.1)

@@ -16,6 +16,7 @@ Reticulum handles all encryption (X25519 + AES-256-GCM) automatically.
 """
 
 import json
+import os
 import re
 import time
 import zlib
@@ -106,6 +107,24 @@ def rpc_error_message(error: Any, default: str = "?") -> str:
     if error is None:
         return default
     return str(error)
+
+
+# ── Private local files ──────────────────────────────────────────────────────
+
+def restrict_private_file_permissions(path: str) -> None:
+    """Repair an existing private file to owner-only permissions."""
+    if os.path.isfile(path):
+        os.chmod(path, 0o600)
+
+
+def save_private_identity(identity: Any, path: str) -> None:
+    """Persist an RNS identity without exposing it through the process umask."""
+    previous_umask = os.umask(0o077)
+    try:
+        identity.to_file(path)
+    finally:
+        os.umask(previous_umask)
+    restrict_private_file_permissions(path)
 
 
 # ── Mesh payload compression ─────────────────────────────────────────────────
