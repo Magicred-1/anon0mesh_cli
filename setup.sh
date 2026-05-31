@@ -868,6 +868,9 @@ def load_keypair(path):
         os.fchmod(f.fileno(), 0o600)
         return Keypair.from_bytes(bytes(json.load(f)))
 
+nonce_path = None
+submitted = False
+
 try:
     payer = load_keypair(os.environ["ANON0MESH_KP_PATH"])
 
@@ -912,6 +915,7 @@ try:
     tx.sign([payer, nonce_kp], bh)
 
     print("  Sending transaction...", file=sys.stderr)
+    submitted = True
     sig = require_string(
         rpc("sendTransaction", [base64.b64encode(bytes(tx)).decode(),
                                 {"encoding": "base64"}]),
@@ -926,11 +930,14 @@ try:
 
 except Exception as exc:
     print(f"ERROR: {exc}", file=sys.stderr)
-    # Remove the saved keypair only if we generated it and the tx failed
-    try:
-        os.remove(nonce_path)
-    except Exception:
-        pass
+    if submitted:
+        print(f"WARNING: transaction submission status is unknown; preserving nonce keypair: {nonce_path}",
+              file=sys.stderr)
+    elif nonce_path is not None:
+        try:
+            os.remove(nonce_path)
+        except Exception:
+            pass
     sys.exit(1)
 PYEOF
         ); then
