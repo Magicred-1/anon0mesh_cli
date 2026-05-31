@@ -236,6 +236,7 @@ keypair and can create a nonce account on your behalf after confirmation
 (~0.00145 SOL rent-exempt deposit, recoverable). Review the prompts before using
 it with a funded wallet. Generated and reused wallet keypair JSON files, plus
 generated nonce keypair files, are restricted to owner-only `0600` permissions.
+Private key reads and writes reject final symlinks and non-regular files.
 
 The client partially signs the transaction (payer slot); the beacon co-signs (broadcaster slot) before submitting to Solana.
 

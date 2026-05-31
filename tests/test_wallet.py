@@ -5,6 +5,7 @@ Requires: pip install solders
 
 import json
 import base64
+import os
 import stat
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -57,6 +58,19 @@ def test_load_private_keypair_repairs_permissions(tmp_path):
 
     assert loaded.pubkey() == expected.pubkey()
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_load_private_keypair_refuses_symlink_without_chmod_target(tmp_path):
+    target = tmp_path / "target.json"
+    _write_keypair(target)
+    target.chmod(0o666)
+    path = tmp_path / "wallet.json"
+    path.symlink_to(target)
+
+    with pytest.raises(OSError, match="Refusing symlinked keypair path"):
+        wallet._load_private_keypair(path)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o666
 
 
 # ── generate_wallet ───────────────────────────────────────────────────────────
@@ -117,6 +131,14 @@ def test_generate_wallet_refuses_symlink_target(tmp_path, capsys):
 
     assert result is None
     assert target.read_text() == "keep"
+    assert "Failed to save" in capsys.readouterr().out
+
+
+def test_generate_wallet_refuses_fifo_target(tmp_path, capsys):
+    path = tmp_path / "wallet.json"
+    os.mkfifo(path)
+
+    assert wallet.generate_wallet(str(path)) is None
     assert "Failed to save" in capsys.readouterr().out
 
 
@@ -296,6 +318,18 @@ def test_auto_load_skips_corrupt_file(tmp_path, monkeypatch):
     state.active_wallet = None
     wallet.auto_load_wallet()
     assert state.active_wallet is None
+
+
+def test_auto_load_skips_dangling_symlink_candidate(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    expected = _write_keypair(tmp_path / "wallet_fallback.json")
+    (tmp_path / "wallet_newer.json").symlink_to(tmp_path / "missing.json")
+    state.active_wallet = None
+
+    wallet.auto_load_wallet()
+
+    assert state.active_wallet is not None
+    assert state.active_wallet["pubkey"] == str(expected.pubkey())
 
 
 def test_auto_load_nothing_found(tmp_path, monkeypatch):

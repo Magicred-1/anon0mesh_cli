@@ -54,9 +54,14 @@ def _validate_u64(value: int, label: str) -> bool:
 
 def _save_private_keypair(path: str, keypair: "Keypair") -> None:
     """Write a Solana keypair with owner-only permissions, including overwrites."""
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    )
     fd = os.open(path, flags, 0o600)
     try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"Refusing non-regular keypair path: {path}")
         os.fchmod(fd, 0o600)
         file_obj = os.fdopen(fd, "w")
         fd = -1
@@ -67,21 +72,33 @@ def _save_private_keypair(path: str, keypair: "Keypair") -> None:
             os.close(fd)
 
 
-def _restrict_private_keypair_permissions(path: str | Path) -> None:
+def _restrict_private_keypair_permissions(fd: int, path: str | Path) -> None:
     """Repair legacy local keypair files created with permissive modes."""
     try:
-        if stat.S_IMODE(os.stat(path).st_mode) != 0o600:
-            os.chmod(path, 0o600)
+        if stat.S_IMODE(os.fstat(fd).st_mode) != 0o600:
+            os.fchmod(fd, 0o600)
             log_warn(f"Restricted keypair permissions to 0600: {path}")
     except OSError as exc:
         log_warn(f"Could not restrict keypair permissions for {path}: {exc}")
 
 
 def _load_private_keypair(path: str | Path) -> "Keypair":
-    """Load a local keypair after repairing legacy file permissions."""
-    _restrict_private_keypair_permissions(path)
-    with open(path) as f:
-        return Keypair.from_bytes(bytes(json.load(f)))
+    """Load a regular local keypair without following a final symlink."""
+    if os.path.islink(path):
+        raise OSError(f"Refusing symlinked keypair path: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"Refusing non-regular keypair path: {path}")
+        _restrict_private_keypair_permissions(fd, path)
+        file_obj = os.fdopen(fd)
+        fd = -1
+        with file_obj as f:
+            return Keypair.from_bytes(bytes(json.load(f)))
+    finally:
+        if fd != -1:
+            os.close(fd)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -106,11 +123,15 @@ def auto_load_wallet() -> None:
     if exact.exists():
         candidates.append(exact)
 
-    candidates += sorted(
-        Path(".").glob("wallet_*.json"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    generated_candidates = []
+    for path in Path(".").glob("wallet_*.json"):
+        try:
+            generated_candidates.append((path.lstat().st_mtime, path))
+        except OSError:
+            continue
+    candidates += [
+        path for _, path in sorted(generated_candidates, key=lambda item: item[0], reverse=True)
+    ]
 
     for path in candidates:
         try:

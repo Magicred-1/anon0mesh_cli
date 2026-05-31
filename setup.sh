@@ -727,13 +727,16 @@ if [[ "$INSTALL_CLIENT" == true && "$SETUP_WALLET" == true ]]; then
         WALLET_KEYPAIR_PATH="$SCRIPT_DIR/wallet.json"
         # Generate keypair via Python; pass path through env to avoid heredoc quoting issues
         if ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" python << 'PYEOF'
-import os, json
+import os, json, stat
 from solders.keypair import Keypair
 kp   = Keypair()
 path = os.environ["ANON0MESH_KP_PATH"]
-flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+flags = (os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
 fd = os.open(path, flags, 0o600)
 with os.fdopen(fd, "w") as f:
+    if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+        raise OSError(f"Refusing non-regular keypair path: {path}")
     os.fchmod(f.fileno(), 0o600)
     json.dump(list(bytes(kp)), f)
 print(f"  Public key : {kp.pubkey()}")
@@ -750,12 +753,18 @@ PYEOF
 
     # ── Show public key + funding instructions ────────────────────────────────
     if [[ -n "$WALLET_KEYPAIR_PATH" ]]; then
-      chmod 600 "$WALLET_KEYPAIR_PATH" \
-        || log_warn "Could not restrict keypair permissions: $WALLET_KEYPAIR_PATH"
       if ! WALLET_PUBKEY=$(ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" python << 'PYEOF'
-import os, json
+import os, json, stat
 from solders.keypair import Keypair
-with open(os.environ["ANON0MESH_KP_PATH"]) as f:
+path = os.environ["ANON0MESH_KP_PATH"]
+if os.path.islink(path):
+    raise OSError(f"Refusing symlinked keypair path: {path}")
+flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+fd = os.open(path, flags)
+with os.fdopen(fd) as f:
+    if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+        raise OSError(f"Refusing non-regular keypair path: {path}")
+    os.fchmod(f.fileno(), 0o600)
     kp = Keypair.from_bytes(bytes(json.load(f)))
 print(kp.pubkey(), end="")
 PYEOF
@@ -806,7 +815,7 @@ PYEOF
           ANON0MESH_RPC="$_SETUP_RPC" \
           ANON0MESH_DIR="$SCRIPT_DIR" \
           python << 'PYEOF'
-import os, sys, json, base64
+import os, sys, json, base64, stat
 import requests
 from solders.keypair     import Keypair
 from solders.pubkey      import Pubkey
@@ -852,15 +861,28 @@ def require_string(value, label):
         raise RuntimeError(f"{label} must be a non-empty string")
     return value
 
+def load_keypair(path):
+    if os.path.islink(path):
+        raise OSError(f"Refusing symlinked keypair path: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(path, flags)
+    with os.fdopen(fd) as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise OSError(f"Refusing non-regular keypair path: {path}")
+        os.fchmod(f.fileno(), 0o600)
+        return Keypair.from_bytes(bytes(json.load(f)))
+
 try:
-    with open(os.environ["ANON0MESH_KP_PATH"]) as f:
-        payer = Keypair.from_bytes(bytes(json.load(f)))
+    payer = load_keypair(os.environ["ANON0MESH_KP_PATH"])
 
     nonce_kp   = Keypair()
     nonce_path = os.path.join(SAVE_DIR, f"nonce_{str(nonce_kp.pubkey())[:8]}.json")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    flags = (os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+             | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     fd = os.open(nonce_path, flags, 0o600)
     with os.fdopen(fd, "w") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise OSError(f"Refusing non-regular keypair path: {nonce_path}")
         os.fchmod(f.fileno(), 0o600)
         json.dump(list(bytes(nonce_kp)), f)
 
