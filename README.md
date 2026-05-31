@@ -2,9 +2,9 @@
 
 **Mesh First, Chain When It Matters.**
 
-anonmesh is a Python MVP for tunneling Solana JSON-RPC requests over [Reticulum's](https://reticulum.network/) end-to-end encrypted mesh network. Off-grid devices interact with the Solana blockchain through connected gateway nodes ("Beacons") over virtually any transport medium — LoRa, BLE, WiFi, Packet Radio, TCP hubs, and more.
+anonmesh is a Python MVP for tunneling Solana JSON-RPC requests over [Reticulum's](https://reticulum.network/) end-to-end encrypted mesh network. Off-grid devices interact with the Solana blockchain through connected gateway nodes ("Beacons") over supported Reticulum transports such as LoRa, WiFi, Packet Radio, and TCP hubs. Desktop BLE relay remains experimental.
 
-After relaying a transaction, the Beacon co-signs and submits an `execute_payment` instruction to the **ble_revshare** Anchor program, logging encrypted payment statistics via [Arcium MPC](https://arcium.com/) — so revenue-share accounting happens on-chain without leaking raw amounts.
+When configured, a Beacon can co-sign and submit an `execute_payment` instruction to the **ble_revshare** Anchor program after relaying a transaction with the required Arcium metadata. This logs encrypted payment statistics via [Arcium MPC](https://arcium.com/) without leaking raw amounts.
 
 ## Architecture
 
@@ -46,7 +46,7 @@ chmod +x setup.sh
 ./setup.sh --client          # client only (adds solders, qrcode)
 ./setup.sh --both            # both
 ./setup.sh --systemd         # also install beacon as a systemd service
-./setup.sh --ble             # add Bluetooth Low Energy transport
+./setup.sh --ble             # install experimental BLE research deps only
 ./setup.sh --meshtastic      # add Meshtastic / LoRa transport
 ./setup.sh --wallet-setup    # generate signing keypair + durable nonce account
 ./setup.sh --mainnet         # target Solana mainnet-beta instead of devnet
@@ -54,25 +54,24 @@ chmod +x setup.sh
 
 ## Configuration
 
-Copy `.env.example` to `.env` and edit:
+Create `.env` only if you need optional Arcium or wallet overrides:
 
 ```bash
-cp .env.example .env
+touch .env
 ```
 
 Key variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `SOLANA_NETWORK` | `devnet` | `devnet` or `mainnet` |
-| `ARCIUM_ENABLED` | `1` | Set to `0` to disable Arcium MPC |
-| `ARCIUM_PAYER_KEYPAIR` | `~/.config/solana/id.json` | Keypair that pays Arcium computation fees |
+| `SOLANA_NETWORK` | `devnet` | Launcher network: `devnet` or `mainnet` |
+| `ARCIUM_ENABLED` | `0` | Set to `1` to enable Arcium MPC |
+| `ARCIUM_PAYER_KEYPAIR` | *(unset)* | Keypair that pays Arcium computation fees |
 | `ARCIUM_RPC_URL` | devnet public endpoint | RPC for Arcium transactions |
-| `ARCIUM_MXE_PUBKEY_HEX` | *(pre-filled for devnet)* | MXE x25519 public key |
+| `ARCIUM_MXE_PUBKEY_HEX` | *(unset)* | MXE x25519 public key |
 | `ARCIUM_CLUSTER_OFFSET` | `456` | `456` = devnet, `2026` = mainnet-alpha |
 | `ARCIUM_BROADCASTER_TOKEN_ACCOUNT` | *(derived)* | Beacon's SPL token account for rev-share |
 | `ARCIUM_TREASURY_TOKEN_ACCOUNT` | *(derived from broadcaster)* | Treasury token account |
-| `ANNOUNCE_INTERVAL` | `300` | Seconds between Reticulum re-announces |
 
 ## Usage
 
@@ -95,6 +94,30 @@ The beacon prints its **DESTINATION HASH** on startup — share this with client
 
 # One-shot balance check
 ./run_client.sh <BEACON_HASH> --balance <SOLANA_ADDRESS>
+```
+
+### 3. Run a Headless Exit Node
+
+Use the headless launcher for a laptop or Linux server that only forwards RPC:
+
+```bash
+./scripts/headless-node.sh preflight
+./scripts/headless-node.sh start
+./scripts/headless-node.sh status
+./scripts/headless-node.sh logs
+./scripts/headless-node.sh stop
+```
+
+Override `ANONMESH_CONFIG_DIR`, `ANONMESH_NETWORK`, or `ANONMESH_RPC_URL` when the defaults do not match your deployment.
+
+## Testing
+
+```bash
+# Fresh local test environment + unit tests
+npm test -- -q
+
+# Localhost Reticulum relay → headless exit node → Solana devnet
+.venv-test/bin/python tests/test_tcp_bridge.py
 ```
 
 ## Arcium MPC — execute_payment flow
@@ -141,20 +164,20 @@ node scripts/<script>.mjs [args]
 
 ## Reticulum configuration
 
-`setup.sh` writes `~/.reticulum/config` automatically. A working example (with the reliable public hubs) is included as [`reticulum_config`](reticulum_config) in this repo — copy it over if you need to reset:
+`setup.sh` writes `~/.reticulum/config` automatically. Re-run setup to reset that config. The included [`reticulum_config`](reticulum_config) file is an RNode reference sample; edit its serial port before using it:
 
 ```bash
 cp reticulum_config ~/.reticulum/config
+# Edit the RNode LoRa port for this machine.
 ```
 
 Public TCP hubs configured by default:
 
-- `dublin.connect.reticulum.network:4965` (RNS Testnet Dublin)
 - `reticulum.betweentheborders.com:4242`
 - `rns.beleth.net:4242`
 - `dfw.us.g00n.cloud:6969`
 
-BLE and Meshtastic / LoRa interfaces are also configured (disabled by default; enable via setup flags).
+RNode LoRa and Meshtastic paths are optional. `setup.sh --ble` installs `bleak` for research only; it does not configure a supported desktop BLE relay. Phone BLE uses the separate Android/iOS native client.
 
 ## Dependencies
 
@@ -166,7 +189,7 @@ BLE and Meshtastic / LoRa interfaces are also configured (disabled by default; e
 | `lxmf` | Beacon discovery over the mesh |
 | `requests` | Solana RPC calls |
 | `solders` | Offline transaction signing (client) |
-| `bleak` | BLE transport (optional) |
+| `bleak` | Experimental desktop BLE research dependency |
 | `meshtastic` | LoRa transport (optional) |
 | `qrcode` | Wallet QR display (optional) |
 

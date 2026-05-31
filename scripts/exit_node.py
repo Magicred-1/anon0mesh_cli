@@ -15,7 +15,6 @@ Usage:
   python scripts/exit_node.py --network mainnet      # mainnet-beta
   python scripts/exit_node.py --rpc https://my.node  # custom RPC
   python scripts/exit_node.py --config /path/to/conf # custom Reticulum config dir
-  python scripts/exit_node.py --port 4343            # TCP listener for relay nodes
 """
 from __future__ import annotations
 

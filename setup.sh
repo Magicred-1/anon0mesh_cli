@@ -116,7 +116,7 @@ if [[ "$NONINTERACTIVE" == false ]]; then
   [[ "$net_choice" == "2" ]] && SOLANA_NETWORK="mainnet"
 
   echo ""
-  read -rp "Install BLE (Bluetooth) support? [y/N]: " ble_choice
+  read -rp "Install experimental desktop BLE research deps? [y/N]: " ble_choice
   [[ "$ble_choice" =~ ^[Yy]$ ]] && INSTALL_BLE=true
 
   echo ""
@@ -144,7 +144,7 @@ log_ok "Configuration:"
 log_info "  Beacon:     $INSTALL_BEACON"
 log_info "  Client:     $INSTALL_CLIENT"
 log_info "  Network:    $SOLANA_NETWORK"
-log_info "  BLE:        $INSTALL_BLE"
+log_info "  BLE deps:   $INSTALL_BLE (experimental; no desktop relay configured)"
 log_info "  RNode LoRa: $INSTALL_RNODE"
 log_info "  Meshtastic: $INSTALL_MESHTASTIC"
 log_info "  systemd:    $INSTALL_SYSTEMD"
@@ -173,7 +173,7 @@ if [[ "$OS_TYPE" == "macos" ]]; then
   fi
 
   if [[ "$INSTALL_BLE" == true ]]; then
-    log_info "BLE: macOS has native CoreBluetooth — no extra system deps needed."
+    log_info "BLE research deps: macOS has native CoreBluetooth."
   fi
 else
   # Linux — use apt-get
@@ -191,7 +191,7 @@ else
   fi
 
   if [[ "$INSTALL_BLE" == true ]]; then
-    log_info "Installing BLE system deps..."
+    log_info "Installing experimental BLE research system deps..."
     sudo apt-get install -y -qq bluetooth bluez libbluetooth-dev || true
   fi
 fi
@@ -251,6 +251,7 @@ python -c "import LXMF" && log_ok "LXMF import OK" || log_warn "LXMF import fail
 
 if [[ "$INSTALL_BLE" == true ]]; then
   python -c "import bleak" && log_ok "bleak import OK" || log_warn "bleak import failed"
+  log_warn "Desktop BLE relay is experimental; bleak alone does not configure a working Reticulum interface"
 fi
 
 if [[ "$INSTALL_CLIENT" == true ]]; then
@@ -292,9 +293,6 @@ if [[ -f "$RNS_CONFIG_FILE" ]]; then
   log_info "Backed up existing config → $BACKUP"
   BACKUP_DONE=true
 fi
-
-BLE_ENABLED="no"
-[[ "$INSTALL_BLE" == true ]] && BLE_ENABLED="yes"
 
 cat > "$RNS_CONFIG_FILE" << RNSCFG
 [reticulum]
