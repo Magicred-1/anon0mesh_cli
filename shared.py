@@ -18,6 +18,7 @@ Reticulum handles all encryption (X25519 + AES-256-GCM) automatically.
 import json
 import os
 import re
+import stat
 import tempfile
 import time
 import zlib
@@ -152,10 +153,49 @@ def is_u64(value: Any) -> bool:
 
 # ── Private local files ──────────────────────────────────────────────────────
 
-def restrict_private_file_permissions(path: str) -> None:
-    """Repair an existing private file to owner-only permissions."""
-    if os.path.isfile(path):
-        os.chmod(path, 0o600)
+def _open_private_regular_fd(path: str | os.PathLike[str]) -> int:
+    """Open a private regular file without following its final path component."""
+    path_str = os.fspath(path)
+    if os.path.islink(path_str):
+        raise OSError(f"Refusing symlinked private file: {path_str}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(path_str, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"Refusing non-regular private file: {path_str}")
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def restrict_private_file_permissions(path: str | os.PathLike[str]) -> bool:
+    """Best-effort repair of an existing regular private file to owner-only permissions."""
+    try:
+        fd = _open_private_regular_fd(path)
+    except OSError:
+        return False
+    try:
+        os.fchmod(fd, 0o600)
+        return True
+    finally:
+        os.close(fd)
+
+
+def read_private_file(path: str | os.PathLike[str], max_bytes: int = 1024 * 1024) -> bytes:
+    """Read a bounded regular private file after repairing owner-only permissions."""
+    fd = _open_private_regular_fd(path)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "rb") as private_file:
+            fd = -1
+            data = private_file.read(max_bytes + 1)
+    finally:
+        if fd != -1:
+            os.close(fd)
+    if len(data) > max_bytes:
+        raise OSError(f"Private file exceeds {max_bytes} byte limit: {os.fspath(path)}")
+    return data
 
 
 def save_private_identity(identity: Any, path: str) -> None:
@@ -171,7 +211,8 @@ def save_private_identity(identity: Any, path: str) -> None:
         fd = -1
         if identity.to_file(temp_path) is False:
             raise OSError("Could not save RNS identity")
-        restrict_private_file_permissions(temp_path)
+        if not restrict_private_file_permissions(temp_path):
+            raise OSError("Could not secure RNS identity")
         os.replace(temp_path, path)
         temp_path = ""
     finally:
@@ -183,7 +224,8 @@ def save_private_identity(identity: Any, path: str) -> None:
             except FileNotFoundError:
                 pass
         os.umask(previous_umask)
-    restrict_private_file_permissions(path)
+    if not restrict_private_file_permissions(path):
+        raise OSError("Could not secure RNS identity")
 
 
 _ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -191,19 +233,21 @@ _ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 def load_dotenv_private(path: str | os.PathLike[str]) -> None:
     """Load simple KEY=VALUE entries after restricting the credential file."""
-    path_str = os.fspath(path)
-    if not os.path.isfile(path_str):
+    try:
+        text = read_private_file(path).decode("utf-8")
+    except FileNotFoundError:
         return
-    restrict_private_file_permissions(path_str)
-    with open(path_str, encoding="utf-8") as env_file:
-        for line in env_file:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip()
-                if _ENV_KEY_RE.fullmatch(key) and "\x00" not in value:
-                    os.environ.setdefault(key, value)
+    except (OSError, UnicodeDecodeError) as exc:
+        log_warn(f"Could not load private env file: {exc}")
+        return
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if _ENV_KEY_RE.fullmatch(key) and "\x00" not in value:
+                os.environ.setdefault(key, value)
 
 
 # ── Mesh payload compression ─────────────────────────────────────────────────

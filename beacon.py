@@ -82,7 +82,8 @@ from shared import (
     SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT, MAX_MESH_REQUEST_BYTES, MAX_MESH_RESPONSE_BYTES,
     MAX_RENDERED_LOG_LINES,
     decode_json, decode_rpc_response, build_response, compress_response, redact_url, rpc_error_message,
-    load_dotenv_private, positive_int, restrict_private_file_permissions, save_private_identity,
+    load_dotenv_private, positive_int, read_private_file,
+    restrict_private_file_permissions, save_private_identity,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
     BOLD, CYAN, GREEN, RESET, DIM,
 )
@@ -622,9 +623,10 @@ def _init_reticulum(config_path: str | None) -> None:
     restrict_private_file_permissions(
         os.path.join(identity_dir, "storage", "transport_identity"))
     identity_path = os.path.join(identity_dir, "anonmesh_beacon_identity")
-    if os.path.isfile(identity_path):
-        beacon_identity = RNS.Identity.from_file(identity_path)
-        restrict_private_file_permissions(identity_path)
+    if os.path.lexists(identity_path):
+        beacon_identity = RNS.Identity.from_bytes(read_private_file(identity_path))
+        if beacon_identity is None:
+            raise OSError("Could not load persisted beacon identity")
         log_info("Loaded persisted beacon identity")
     else:
         beacon_identity = RNS.Identity()
@@ -644,9 +646,7 @@ def _load_cosign_keypair() -> None:
         return
     try:
         kp_path = os.path.expanduser(kp_path)
-        restrict_private_file_permissions(kp_path)
-        with open(kp_path) as f:
-            beacon_cosign_keypair = _Keypair.from_bytes(bytes(json.load(f)))
+        beacon_cosign_keypair = _Keypair.from_bytes(bytes(json.loads(read_private_file(kp_path))))
         log_ok(f"Co-sign keypair ready: {beacon_cosign_keypair.pubkey()}")
     except Exception as exc:
         log_warn(f"Could not load ARCIUM_PAYER_KEYPAIR for co-signing: {exc}")

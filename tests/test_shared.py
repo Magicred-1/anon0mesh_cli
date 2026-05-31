@@ -179,6 +179,33 @@ def test_restrict_private_file_permissions_repairs_existing_file(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_restrict_private_file_permissions_ignores_symlink_without_chmod_target(tmp_path):
+    target = tmp_path / "target"
+    target.write_text("secret")
+    target.chmod(0o666)
+    path = tmp_path / "identity"
+    path.symlink_to(target)
+
+    assert not shared.restrict_private_file_permissions(path)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o666
+
+
+def test_read_private_file_refuses_fifo(tmp_path):
+    path = tmp_path / "identity"
+    os.mkfifo(path)
+
+    with pytest.raises(OSError, match="Refusing non-regular private file"):
+        shared.read_private_file(path)
+
+
+def test_read_private_file_rejects_oversized_file(tmp_path):
+    path = tmp_path / "identity"
+    path.write_bytes(b"x" * 5)
+
+    with pytest.raises(OSError, match="Private file exceeds 4 byte limit"):
+        shared.read_private_file(path, max_bytes=4)
+
+
 def test_save_private_identity_uses_owner_only_permissions(tmp_path):
     path = tmp_path / "identity"
 
@@ -247,6 +274,21 @@ def test_load_dotenv_private_skips_invalid_entries(tmp_path, monkeypatch):
     assert os.environ["VALID_NAME"] == "loaded"
     assert "INVALID-NAME" not in os.environ
     assert "NUL_VALUE" not in os.environ
+
+
+def test_load_dotenv_private_skips_symlink_without_chmod_target(tmp_path, monkeypatch, capsys):
+    target = tmp_path / "target.env"
+    target.write_text("SYMLINKED_TEST_VALUE=loaded\n")
+    target.chmod(0o666)
+    path = tmp_path / ".env"
+    path.symlink_to(target)
+    monkeypatch.delenv("SYMLINKED_TEST_VALUE", raising=False)
+
+    shared.load_dotenv_private(path)
+
+    assert "SYMLINKED_TEST_VALUE" not in os.environ
+    assert stat.S_IMODE(target.stat().st_mode) == 0o666
+    assert "Could not load private env file" in capsys.readouterr().out
 
 
 # ── response compression ──────────────────────────────────────────────────────

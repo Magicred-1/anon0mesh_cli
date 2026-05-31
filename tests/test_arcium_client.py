@@ -396,6 +396,26 @@ def test_arcium_beacon_from_env_repairs_payer_permissions(tmp_path, monkeypatch)
     keypair_type.from_bytes.assert_called_once_with(bytes([1, 2, 3]))
 
 
+def test_arcium_beacon_from_env_refuses_symlinked_payer_without_chmod_target(
+    tmp_path, monkeypatch, capsys,
+):
+    target = tmp_path / "payer.json"
+    target.write_text("[1, 2, 3]")
+    target.chmod(0o666)
+    path = tmp_path / "payer-link.json"
+    path.symlink_to(target)
+    monkeypatch.setenv("ARCIUM_ENABLED", "1")
+    monkeypatch.setenv("ARCIUM_PAYER_KEYPAIR", str(path))
+    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", "ab")
+    monkeypatch.setattr(arcium_client, "HAS_SOLANA", True)
+
+    beacon = arcium_client.ArciumBeacon.from_env()
+
+    assert not beacon.enabled
+    assert stat.S_IMODE(target.stat().st_mode) == 0o666
+    assert "Arcium env error" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("offset", ["not-an-int", "-1", str(1 << 32)])
 def test_arcium_beacon_from_env_invalid_cluster_offset_disables(tmp_path, monkeypatch, offset, capsys):
     path = tmp_path / "payer.json"

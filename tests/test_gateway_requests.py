@@ -224,6 +224,23 @@ def test_beacon_repairs_cosign_keypair_permissions(tmp_path, monkeypatch):
     keypair_type.from_bytes.assert_called_once_with(bytes([1, 2, 3]))
 
 
+def test_beacon_refuses_symlinked_cosign_keypair_without_chmod_target(tmp_path, monkeypatch, capsys):
+    target = tmp_path / "payer.json"
+    target.write_text("[1, 2, 3]")
+    target.chmod(0o666)
+    path = tmp_path / "payer-link.json"
+    path.symlink_to(target)
+    monkeypatch.setattr(beacon, "HAS_SOLDERS", True)
+    monkeypatch.setattr(beacon, "beacon_cosign_keypair", None)
+    monkeypatch.setenv("ARCIUM_PAYER_KEYPAIR", str(path))
+
+    beacon._load_cosign_keypair()
+
+    assert beacon.beacon_cosign_keypair is None
+    assert stat.S_IMODE(target.stat().st_mode) == 0o666
+    assert "Could not load ARCIUM_PAYER_KEYPAIR" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("params", [1, ["tx", {"arcium": "not-an-object"}]])
 def test_beacon_logs_skip_for_malformed_arcium_stats_metadata(params, monkeypatch, capsys):
     arcium = MagicMock(enabled=True)

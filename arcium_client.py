@@ -49,7 +49,7 @@ except ImportError:
     HAS_SOLANA = False
 
 from shared import (
-    load_dotenv_private, restrict_private_file_permissions,
+    load_dotenv_private, read_private_file,
     log_info, log_ok, log_warn, log_err, redact_urls,
 )
 
@@ -380,9 +380,7 @@ class ArciumBeacon:
 
         try:
             kp_path = os.path.expanduser(required["ARCIUM_PAYER_KEYPAIR"])
-            restrict_private_file_permissions(kp_path)
-            with open(kp_path) as f:
-                payer = Keypair.from_bytes(bytes(json.load(f)))
+            payer = Keypair.from_bytes(bytes(json.loads(read_private_file(kp_path))))
 
             cluster_offset = int(os.getenv("ARCIUM_CLUSTER_OFFSET", str(CLUSTER_OFFSET_DEVNET)))
             if not 0 <= cluster_offset <= _MAX_U32:

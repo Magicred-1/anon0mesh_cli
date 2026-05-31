@@ -40,7 +40,7 @@ from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT, MAX_MESH_REQUEST_BYTES, MAX_MESH_RESPONSE_BYTES,
     decode_json, decode_rpc_response, build_response, compress_response, redact_url, rpc_error_message,
-    positive_int, restrict_private_file_permissions, save_private_identity,
+    positive_int, read_private_file, restrict_private_file_permissions, save_private_identity,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
     BOLD, CYAN, GREEN, RESET, DIM,
 )
@@ -288,9 +288,10 @@ def setup_exit_node(config_path: str | None, network: str, custom_rpc: str | Non
     restrict_private_file_permissions(
         os.path.join(identity_dir, "storage", "transport_identity"))
     identity_path = os.path.join(identity_dir, "anonmesh_exit_identity")
-    if os.path.isfile(identity_path):
-        exit_identity = RNS.Identity.from_file(identity_path)
-        restrict_private_file_permissions(identity_path)
+    if os.path.lexists(identity_path):
+        exit_identity = RNS.Identity.from_bytes(read_private_file(identity_path))
+        if exit_identity is None:
+            raise OSError("Could not load persisted exit node identity")
         log_info("Loaded persisted exit node identity")
     else:
         exit_identity = RNS.Identity()
