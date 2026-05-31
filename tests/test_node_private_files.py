@@ -53,3 +53,21 @@ def test_node_private_reader_refuses_non_regular_file(tmp_path):
     result = _read_private_text(tmp_path)
 
     assert result.returncode != 0
+
+
+def test_node_private_reader_rejects_oversized_file(tmp_path):
+    path = tmp_path / ".env"
+    path.write_bytes(b"x" * (1024 * 1024 + 1))
+
+    result = _read_private_text(path)
+
+    assert result.returncode != 0
+
+
+def test_node_private_reader_rejects_invalid_utf8(tmp_path):
+    path = tmp_path / ".env"
+    path.write_bytes(b"\xff")
+
+    result = _read_private_text(path)
+
+    assert result.returncode != 0
