@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import stat
 import subprocess
 
 
@@ -33,6 +34,28 @@ def test_launcher_uses_restrictive_umask(tmp_path):
 
     assert result.returncode == 0
     assert int((state_dir / "observed-umask").read_text().strip(), 8) == 0o77
+
+
+def test_launcher_repairs_existing_state_permissions(tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    state_dir.chmod(0o777)
+    log_file = state_dir / "headless-node.log"
+    log_file.write_text("existing log")
+    log_file.chmod(0o666)
+    env = {**os.environ, "ANONMESH_STATE_DIR": str(state_dir)}
+
+    result = subprocess.run(
+        [str(LAUNCHER), "status"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert stat.S_IMODE(state_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(log_file.stat().st_mode) == 0o600
 
 
 def test_stop_clears_stale_pid_without_signalling_unrelated_process(tmp_path):

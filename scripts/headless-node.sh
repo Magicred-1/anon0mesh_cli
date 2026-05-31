@@ -11,6 +11,15 @@ LOG_FILE="$STATE_DIR/headless-node.log"
 CONFIG_DIR="${ANONMESH_CONFIG_DIR:-$HOME/.reticulum}"
 NETWORK="${ANONMESH_NETWORK:-devnet}"
 
+ensure_state_dir() {
+  mkdir -p "$STATE_DIR"
+  chmod 700 "$STATE_DIR"
+  [[ ! -f "$PID_FILE" ]] || chmod 600 "$PID_FILE"
+  [[ ! -f "$LOG_FILE" ]] || chmod 600 "$LOG_FILE"
+}
+
+ensure_state_dir
+
 if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="${ANONMESH_PYTHON:-python3}"
 fi
@@ -48,7 +57,6 @@ start() {
   fi
 
   "$PYTHON_BIN" "$SCRIPT_DIR/preflight.py" "${preflight_args[@]}"
-  mkdir -p "$STATE_DIR"
   nohup "$PYTHON_BIN" "$SCRIPT_DIR/exit_node.py" "${node_args[@]}" "$@" >> "$LOG_FILE" 2>&1 &
   echo "$!" > "$PID_FILE"
   sleep 1
@@ -98,8 +106,8 @@ stop() {
 }
 
 logs() {
-  mkdir -p "$STATE_DIR"
   touch "$LOG_FILE"
+  chmod 600 "$LOG_FILE"
   tail -n 100 -f "$LOG_FILE"
 }
 
