@@ -70,6 +70,12 @@ def test_get_balance_error(mock_pool, capsys):
     assert "invalid base58" in capsys.readouterr().out
 
 
+def test_get_balance_scalar_error(mock_pool, capsys):
+    mock_pool.call.return_value = {"error": "busy"}
+    rpc.get_balance("bad")
+    assert "busy" in capsys.readouterr().out
+
+
 def test_get_balance_none_response(mock_pool, capsys):
     mock_pool.call.return_value = None
     rpc.get_balance("addr1")  # must not raise
@@ -162,6 +168,12 @@ def test_get_beacon_pubkey_error(mock_pool, capsys):
     assert "not configured" in capsys.readouterr().out
 
 
+def test_get_beacon_pubkey_scalar_error(mock_pool, capsys):
+    mock_pool.call.return_value = {"error": "busy"}
+    assert rpc.get_beacon_pubkey() is None
+    assert "busy" in capsys.readouterr().out
+
+
 # ── cosign_and_send ───────────────────────────────────────────────────────────
 
 def test_cosign_and_send_success(mock_pool, capsys):
@@ -175,6 +187,12 @@ def test_cosign_and_send_error(mock_pool, capsys):
     mock_pool.call.return_value = {"error": {"message": "co-sign rejected"}}
     assert rpc.cosign_and_send("tx_b64") is None
     assert "co-sign rejected" in capsys.readouterr().out
+
+
+def test_cosign_and_send_scalar_error(mock_pool, capsys):
+    mock_pool.call.return_value = {"error": "busy"}
+    assert rpc.cosign_and_send("tx_b64") is None
+    assert "busy" in capsys.readouterr().out
 
 
 def test_cosign_and_send_none_response(mock_pool):
@@ -208,6 +226,12 @@ def test_send_transaction_error(mock_pool, capsys):
     mock_pool.call.return_value = {"error": {"message": "blockhash expired"}}
     rpc.send_transaction("b64tx")
     assert "blockhash expired" in capsys.readouterr().out
+
+
+def test_send_transaction_scalar_error(mock_pool, capsys):
+    mock_pool.call.return_value = {"error": "busy"}
+    rpc.send_transaction("b64tx")
+    assert "busy" in capsys.readouterr().out
 
 
 def test_send_transaction_none(mock_pool, capsys):

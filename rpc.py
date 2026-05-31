@@ -12,7 +12,7 @@ import concurrent.futures
 
 import state
 from shared import (
-    log_info, log_ok, log_warn, log_err,
+    log_info, log_ok, log_warn, log_err, rpc_error_message,
     BOLD, CYAN, GREEN, RED, RESET, DIM,
 )
 
@@ -56,7 +56,7 @@ def get_balance(address):
     if resp is None:
         return
     if "error" in resp:
-        log_err(f"RPC error: {resp['error'].get('message', resp['error'])}")
+        log_err(f"RPC error: {rpc_error_message(resp['error'])}")
         return
     lamports = resp.get("result", {})
     if isinstance(lamports, dict):
@@ -249,7 +249,7 @@ def get_beacon_pubkey() -> str | None:
     if resp is None:
         return None
     if "error" in resp:
-        log_err(f"getBeaconPubkey: {resp['error'].get('message', resp['error'])}")
+        log_err(f"getBeaconPubkey: {rpc_error_message(resp['error'])}")
         return None
     return _extract_result(resp)
 
@@ -268,7 +268,7 @@ def cosign_and_send(partial_tx_b64: str, arcium_meta: dict | None = None) -> str
     if resp is None:
         return None
     if "error" in resp:
-        log_err(f"Co-sign rejected: {resp['error'].get('message', resp['error'])}")
+        log_err(f"Co-sign rejected: {rpc_error_message(resp['error'])}")
         return None
     sig = _extract_result(resp)
     if sig:
@@ -286,7 +286,7 @@ def send_transaction(signed_tx_b64):
     if resp is None:
         return
     if "error" in resp:
-        log_err(f"Transaction rejected: {resp['error'].get('message', resp['error'])}")
+        log_err(f"Transaction rejected: {rpc_error_message(resp['error'])}")
         return
     log_ok("Transaction relayed via mesh!")
     print(f"\n  Signature: {BOLD}{GREEN}{resp.get('result', '?')}{RESET}\n")

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -78,3 +78,28 @@ def test_exit_node_connection_error_does_not_leak_rpc_credentials(monkeypatch, c
     assert "secret" not in output
     assert "user:pass" not in output
     assert "https://rpc.example.test/..." in output
+
+
+def test_beacon_logs_scalar_rpc_error_without_traceback(capsys):
+    http_response = MagicMock()
+    http_response.content = b'{"error":"busy"}'
+    http_response.json.return_value = {"error": "busy"}
+
+    with patch.object(beacon.requests, "post", return_value=http_response):
+        response = decode_json(beacon.forward_plain_rpc({}, 1, 1, "getSlot"))
+
+    assert response == {"error": "busy"}
+    assert "Solana error: busy" in capsys.readouterr().out
+
+
+def test_exit_node_logs_scalar_rpc_error_without_traceback(capsys):
+    http_response = MagicMock()
+    http_response.content = b'{"error":"busy"}'
+    http_response.json.return_value = {"error": "busy"}
+
+    with patch.object(exit_node.requests, "post", return_value=http_response):
+        response, method, _ = exit_node.forward_rpc(build_rpc("getSlot"))
+
+    assert decode_json(response) == {"error": "busy"}
+    assert method == "getSlot"
+    assert "error: busy" in capsys.readouterr().out

@@ -97,6 +97,16 @@ def test_redact_urls_hides_embedded_credentials_and_path_tokens():
     assert shared.redact_urls(text) == "request to https://rpc.example.test/... failed"
 
 
+# ── rpc_error_message ─────────────────────────────────────────────────────────
+
+def test_rpc_error_message_extracts_object_message():
+    assert shared.rpc_error_message({"message": "busy"}) == "busy"
+
+
+def test_rpc_error_message_accepts_scalar_error():
+    assert shared.rpc_error_message("busy") == "busy"
+
+
 # ── quiet mode ─────────────────────────────────────────────────────────────────
 
 def test_log_info_visible_by_default(capsys):

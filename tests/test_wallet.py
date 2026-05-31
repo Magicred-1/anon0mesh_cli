@@ -602,3 +602,20 @@ def test_create_nonce_account_invalid_blockhash(tmp_path, capsys):
 
     assert result is None
     assert "Invalid blockhash" in capsys.readouterr().out
+
+
+def test_create_nonce_account_scalar_send_error(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    _write_keypair(tmp_path / "nonce.json")
+    blockhash = "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+
+    with patch("rpc.rpc_call", side_effect=[{"result": 1_447_680}, {"error": "busy"}]), \
+         patch("rpc.get_recent_blockhash", return_value=blockhash):
+        result = wallet.create_nonce_account(
+            str(tmp_path / "payer.json"),
+            str(tmp_path / "nonce.json"),
+            None,
+        )
+
+    assert result is None
+    assert "busy" in capsys.readouterr().out

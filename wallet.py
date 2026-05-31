@@ -16,7 +16,7 @@ from pathlib import Path
 
 import state
 from shared import (
-    log_info, log_ok, log_warn, log_err,
+    log_info, log_ok, log_warn, log_err, rpc_error_message,
     BOLD, GREEN, YELLOW, RED, RESET, DIM,
 )
 
@@ -677,7 +677,7 @@ def create_nonce_account(
         log_err("No response from beacon for sendTransaction")
         return None
     if "error" in resp:
-        log_err(f"Transaction rejected: {resp['error'].get('message', resp['error'])}")
+        log_err(f"Transaction rejected: {rpc_error_message(resp['error'])}")
         return None
 
     sig = resp.get("result", "?")

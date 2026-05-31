@@ -79,7 +79,7 @@ RNS.Transport.synthesize_tunnel = staticmethod(_safe_synthesize_tunnel)
 from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT,
-    decode_json, build_response, compress_response, redact_url,
+    decode_json, build_response, compress_response, redact_url, rpc_error_message,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
     BOLD, CYAN, GREEN, RESET, DIM,
 )
@@ -255,10 +255,13 @@ def forward_plain_rpc(req: dict, req_id: int, count: int, method: str) -> bytes:
             if "result" in parsed:
                 log_ok(f"[#{count}] Solana ✔  method={method}  type={type(parsed['result']).__name__}")
             elif "error" in parsed:
-                log_warn(f"[#{count}] Solana error: {parsed['error'].get('message', '?')}")
-                logs = parsed["error"].get("data", {}) or {}
-                for line in (logs.get("logs") or []):
-                    log_warn(f"  sim> {line}")
+                error = parsed["error"]
+                log_warn(f"[#{count}] Solana error: {rpc_error_message(error)}")
+                if isinstance(error, dict):
+                    logs = error.get("data", {}) or {}
+                    if isinstance(logs, dict):
+                        for line in (logs.get("logs") or []):
+                            log_warn(f"  sim> {line}")
         except Exception:
             pass
         return http_resp.content

@@ -39,7 +39,7 @@ except ImportError:
 from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT,
-    decode_json, build_response, compress_response, redact_url,
+    decode_json, build_response, compress_response, redact_url, rpc_error_message,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
     BOLD, CYAN, GREEN, RESET, DIM,
 )
@@ -120,7 +120,7 @@ def forward_rpc(raw_request: bytes) -> tuple[bytes, str, float]:
             if "result" in parsed:
                 log_ok(f"[#{count}] ← {method}  {len(result_bytes)}B  {rtt_ms:.0f}ms")
             elif "error" in parsed:
-                err_msg = parsed["error"].get("message", "?")
+                err_msg = rpc_error_message(parsed["error"])
                 log_warn(f"[#{count}] ← {method}  error: {err_msg}  {rtt_ms:.0f}ms")
         except Exception:
             log_ok(f"[#{count}] ← {method}  {len(result_bytes)}B  {rtt_ms:.0f}ms")

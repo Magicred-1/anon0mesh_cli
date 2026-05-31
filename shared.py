@@ -99,6 +99,15 @@ def redact_urls(text: str) -> str:
     return _URL_RE.sub(lambda match: redact_url(match.group(0)), text)
 
 
+def rpc_error_message(error: Any, default: str = "?") -> str:
+    """Format a JSON-RPC error whether the peer returned an object or scalar."""
+    if isinstance(error, dict):
+        return str(error.get("message", error))
+    if error is None:
+        return default
+    return str(error)
+
+
 # ── Mesh payload compression ─────────────────────────────────────────────────
 # Solana RPC responses are typically 1–10 KB of JSON.  LoRa links have ~1.2 kbps
 # throughput with a Reticulum MTU of ~465 bytes.  Compressing before transmission
