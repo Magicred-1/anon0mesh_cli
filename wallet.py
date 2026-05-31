@@ -640,7 +640,7 @@ def create_nonce_account(
     if "error" in resp:
         log_err(f"RPC error: {resp['error']}"); return None
     rent_lamports = _extract_result(resp)
-    if not isinstance(rent_lamports, int):
+    if isinstance(rent_lamports, bool) or not isinstance(rent_lamports, int):
         log_err(f"Unexpected getMinimumBalanceForRentExemption response: {rent_lamports}")
         return None
     log_info(f"Rent-exempt minimum: {rent_lamports:,} lamports ({rent_lamports / 1e9:.9f} SOL)")
@@ -680,7 +680,10 @@ def create_nonce_account(
         log_err(f"Transaction rejected: {rpc_error_message(resp['error'])}")
         return None
 
-    sig = resp.get("result", "?")
+    sig = resp.get("result")
+    if not isinstance(sig, str) or not sig:
+        log_err(f"Unexpected sendTransaction response: {resp}")
+        return None
     print(f"\n  {GREEN}{BOLD}Nonce account created!{RESET}")
     print(f"  Nonce account pubkey: {BOLD}{nonce_pubkey}{RESET}")
     print(f"  Authority:            {authority_pubkey}")
