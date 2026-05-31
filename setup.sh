@@ -827,6 +827,7 @@ RPC       = os.environ["ANON0MESH_RPC"]
 SAVE_DIR  = os.environ["ANON0MESH_DIR"]
 NONCE_LEN = 80  # fixed by the Solana runtime
 MAX_U64   = (1 << 64) - 1
+MAX_RPC_RESPONSE_BYTES = 1024 * 1024
 
 def rpc(method, params):
     r = requests.post(
@@ -834,9 +835,25 @@ def rpc(method, params):
         json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
         headers={"Content-Type": "application/json"},
         timeout=20,
+        stream=True,
     )
-    r.raise_for_status()
-    d = r.json()
+    try:
+        r.raise_for_status()
+        chunks = []
+        size = 0
+        for chunk in r.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            size += len(chunk)
+            if size > MAX_RPC_RESPONSE_BYTES:
+                raise RuntimeError(f"{method} response exceeds size limit")
+            chunks.append(chunk)
+        try:
+            d = json.loads(b"".join(chunks))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"{method} returned invalid JSON: {exc}") from exc
+    finally:
+        r.close()
     if not isinstance(d, dict):
         raise RuntimeError(f"{method} returned a non-object response")
     if "error" in d:
