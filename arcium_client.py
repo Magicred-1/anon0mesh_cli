@@ -342,10 +342,12 @@ class ArciumBeacon:
 
     def __init__(self, client: ArciumBeaconClient | None):
         self._client = client
-        self._loop   = asyncio.new_event_loop()
-        self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
+        self._loop   = None
+        self._thread = None
         self.enabled = client is not None
         if self.enabled:
+            self._loop = asyncio.new_event_loop()
+            self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
             self._thread.start()
             fut = asyncio.run_coroutine_threadsafe(self._client.connect(), self._loop)
             try:
@@ -353,6 +355,23 @@ class ArciumBeacon:
             except Exception as exc:
                 log_err(f"Arcium init failed: {redact_urls(str(exc))}")
                 self.enabled = False
+                self._cleanup_failed_init(fut)
+
+    def _cleanup_failed_init(self, connect_future) -> None:
+        """Bound cleanup after a failed or timed-out asynchronous connect."""
+        connect_future.cancel()
+        try:
+            close_future = asyncio.run_coroutine_threadsafe(self._client.close(), self._loop)
+            close_future.result(timeout=5)
+        except Exception as exc:
+            log_warn(f"Arcium cleanup failed: {redact_urls(str(exc))}")
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                log_warn("Arcium cleanup timed out while stopping event loop")
+            else:
+                self._loop.close()
 
     @classmethod
     def from_env(cls) -> "ArciumBeacon":

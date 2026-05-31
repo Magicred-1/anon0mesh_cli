@@ -371,6 +371,27 @@ def test_arcium_beacon_disabled_when_env_not_set(monkeypatch):
 def test_arcium_beacon_none_client_is_disabled():
     beacon = arcium_client.ArciumBeacon(None)
     assert not beacon.enabled
+    assert beacon._loop is None
+    assert beacon._thread is None
+
+
+def test_arcium_beacon_failed_connect_closes_client_and_stops_loop():
+    class FailingClient:
+        closed = False
+
+        async def connect(self):
+            raise RuntimeError("rpc unavailable")
+
+        async def close(self):
+            self.closed = True
+
+    client = FailingClient()
+    beacon = arcium_client.ArciumBeacon(client)
+
+    assert not beacon.enabled
+    assert client.closed
+    assert not beacon._thread.is_alive()
+    assert beacon._loop.is_closed()
 
 
 def test_arcium_beacon_log_payment_stats_returns_none_when_disabled():
