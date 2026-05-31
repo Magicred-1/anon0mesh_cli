@@ -242,7 +242,11 @@ def offline_sign_transfer(keypair_json_path, to_address, lamports, blockhash=Non
         return None
 
     from_pubkey = keypair.pubkey()
-    to_pubkey   = Pubkey.from_string(to_address)
+    try:
+        to_pubkey = Pubkey.from_string(to_address)
+    except ValueError as exc:
+        log_err(f"Invalid recipient address: {exc}")
+        return None
     log_info(f"Signing  from={from_pubkey}  to={to_pubkey}  lamports={lamports}")
 
     if blockhash is None:
@@ -252,10 +256,16 @@ def offline_sign_transfer(keypair_json_path, to_address, lamports, blockhash=Non
             log_err("Could not obtain blockhash")
             return None
 
+    try:
+        blockhash_value = Hash.from_string(blockhash)
+    except Exception as exc:
+        log_err(f"Invalid blockhash: {exc}")
+        return None
+
     ix  = transfer(TransferParams(from_pubkey=from_pubkey, to_pubkey=to_pubkey, lamports=lamports))
-    msg = Message.new_with_blockhash([ix], from_pubkey, Hash.from_string(blockhash))
+    msg = Message.new_with_blockhash([ix], from_pubkey, blockhash_value)
     tx  = Transaction.new_unsigned(msg)
-    tx.sign([keypair], Hash.from_string(blockhash))
+    tx.sign([keypair], blockhash_value)
     tx_b64 = base64.b64encode(bytes(tx)).decode("utf-8")
     log_ok(f"Transaction signed offline ({len(tx_b64)} chars)")
     print(f"\n  Signed TX: {BOLD}{tx_b64[:72]}...{RESET}\n")
@@ -370,6 +380,8 @@ def partial_sign_execute_payment(
         recipient_pk  = Pubkey.from_string(recipient_str)
         # Treasury defaults to beacon/operator if not explicitly provided
         treasury_pk = Pubkey.from_string(treasury_str) if treasury_str else beacon_pubkey
+        broadcaster_ta = (Pubkey.from_string(broadcaster_token_account_str)
+                          if broadcaster_token_account_str else None)
     except ValueError as exc:
         log_err(f"Invalid address: {exc}")
         return None
@@ -399,9 +411,7 @@ def partial_sign_execute_payment(
     payer_ta       = _get_ata(payer_pubkey,  mint_pubkey)
     recipient_ta   = _get_ata(recipient_pk,  mint_pubkey)
     treasury_ta    = _get_ata(treasury_pk,   mint_pubkey)
-    broadcaster_ta = (Pubkey.from_string(broadcaster_token_account_str)
-                      if broadcaster_token_account_str
-                      else _get_ata(beacon_pubkey, mint_pubkey))
+    broadcaster_ta = broadcaster_ta or _get_ata(beacon_pubkey, mint_pubkey)
 
     # sign_pda_account: PDA derived from seeds=[b"ArciumSignerAccount"] on this program
     sign_pda, _   = Pubkey.find_program_address([b"ArciumSignerAccount"], prog_pubkey)
@@ -525,7 +535,11 @@ def partial_sign_execute_payment(
             return None
         nonce_value = nonce_info["nonce"]
 
-    nonce_hash = Hash.from_string(nonce_value)
+    try:
+        nonce_hash = Hash.from_string(nonce_value)
+    except Exception as exc:
+        log_err(f"Invalid nonce value: {exc}")
+        return None
     advance_ix = advance_nonce_account(AdvanceNonceAccountParams(
         nonce_pubkey=nonce_pubkey,
         authorized_pubkey=payer_pubkey,
@@ -599,7 +613,11 @@ def create_nonce_account(
 
     payer_pubkey     = payer.pubkey()
     nonce_pubkey     = nonce_kp.pubkey()
-    authority_pubkey = Pubkey.from_string(authority_address) if authority_address else payer_pubkey
+    try:
+        authority_pubkey = Pubkey.from_string(authority_address) if authority_address else payer_pubkey
+    except ValueError as exc:
+        log_err(f"Invalid authority address: {exc}")
+        return None
 
     log_info(f"Payer:         {payer_pubkey}")
     log_info(f"Nonce account: {nonce_pubkey}")
@@ -636,7 +654,11 @@ def create_nonce_account(
         authority=authority_pubkey,
     ))
 
-    bh  = Hash.from_string(blockhash)
+    try:
+        bh = Hash.from_string(blockhash)
+    except Exception as exc:
+        log_err(f"Invalid blockhash: {exc}")
+        return None
     msg = Message.new_with_blockhash([create_ix, init_ix], payer_pubkey, bh)
     tx  = Transaction.new_unsigned(msg)
     tx.sign([payer, nonce_kp], bh)
@@ -697,8 +719,12 @@ def offline_sign_nonce_transfer(
 
     payer_pubkey     = payer.pubkey()
     authority_pubkey = authority_kp.pubkey()
-    nonce_pubkey     = Pubkey.from_string(nonce_account_str)
-    to_pubkey        = Pubkey.from_string(to_address)
+    try:
+        nonce_pubkey = Pubkey.from_string(nonce_account_str)
+        to_pubkey = Pubkey.from_string(to_address)
+    except ValueError as exc:
+        log_err(f"Invalid address: {exc}")
+        return None
 
     if nonce_value is None:
         log_info("Fetching current nonce value from chain...")
@@ -725,7 +751,11 @@ def offline_sign_nonce_transfer(
         lamports=lamports,
     ))
 
-    nonce_hash = Hash.from_string(nonce_value)
+    try:
+        nonce_hash = Hash.from_string(nonce_value)
+    except Exception as exc:
+        log_err(f"Invalid nonce value: {exc}")
+        return None
     msg = Message.new_with_blockhash([advance_ix, transfer_ix], payer_pubkey, nonce_hash)
     tx  = Transaction.new_unsigned(msg)
 

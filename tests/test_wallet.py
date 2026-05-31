@@ -260,6 +260,32 @@ def test_auto_load_nothing_found(tmp_path, monkeypatch):
     assert state.active_wallet is None
 
 
+# ── offline_sign_transfer ─────────────────────────────────────────────────────
+
+def test_offline_sign_transfer_invalid_recipient(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.offline_sign_transfer(
+        str(tmp_path / "payer.json"),
+        "not-a-valid-pubkey",
+        1,
+        ZERO_HASH,
+    )
+    assert result is None
+    assert "Invalid recipient address" in capsys.readouterr().out
+
+
+def test_offline_sign_transfer_invalid_blockhash(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.offline_sign_transfer(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        1,
+        "not-a-valid-blockhash",
+    )
+    assert result is None
+    assert "Invalid blockhash" in capsys.readouterr().out
+
+
 # ── offline_sign_nonce_transfer ───────────────────────────────────────────────
 
 def test_offline_sign_nonce_transfer_returns_base64(tmp_path):
@@ -321,6 +347,38 @@ def test_offline_sign_nonce_transfer_zero_lamports_still_signs(tmp_path):
     )
     # 0 lamports is valid for signing (the tx is legal, Solana may reject it)
     assert tx is not None
+
+
+@pytest.mark.parametrize("nonce_account,to_address", [
+    ("not-a-valid-pubkey", str(Keypair().pubkey())),
+    (str(Keypair().pubkey()), "not-a-valid-pubkey"),
+])
+def test_offline_sign_nonce_transfer_invalid_address(tmp_path, capsys, nonce_account, to_address):
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.offline_sign_nonce_transfer(
+        str(tmp_path / "payer.json"),
+        nonce_account,
+        str(tmp_path / "payer.json"),
+        to_address,
+        1,
+        ZERO_HASH,
+    )
+    assert result is None
+    assert "Invalid address" in capsys.readouterr().out
+
+
+def test_offline_sign_nonce_transfer_invalid_nonce_value(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.offline_sign_nonce_transfer(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        1,
+        "not-a-valid-blockhash",
+    )
+    assert result is None
+    assert "Invalid nonce value" in capsys.readouterr().out
 
 
 # ── partial_sign_execute_payment ──────────────────────────────────────────────
@@ -385,6 +443,47 @@ def test_partial_sign_execute_payment_invalid_address(tmp_path, capsys):
     assert "Invalid address" in capsys.readouterr().out
 
 
+def test_partial_sign_execute_payment_invalid_broadcaster_token_account(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.partial_sign_execute_payment(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        1_000,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+        broadcaster_token_account_str="not-a-valid-pubkey",
+    )
+    assert result is None
+    assert "Invalid address" in capsys.readouterr().out
+
+
+@patch("wallet._account_exists", return_value=True)
+@patch("arcium_client._run_shim")
+@patch("arcium_client.rescue_encrypt")
+def test_partial_sign_execute_payment_invalid_nonce_value(mock_encrypt, mock_shim, _mock_exists, tmp_path, capsys):
+    mock_encrypt.return_value = {
+        "ciphertexts": [[0] * 32],
+        "pubkey_hex": "00" * 32,
+        "nonce_bn": "0",
+    }
+    mock_shim.return_value = _arcium_accounts()
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.partial_sign_execute_payment(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        1_000,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+        nonce_value="not-a-valid-blockhash",
+    )
+    assert result is None
+    assert "Invalid nonce value" in capsys.readouterr().out
+
+
 # ── create_nonce_account (instruction build) ──────────────────────────────────
 
 def test_create_nonce_account_authority_param_name(tmp_path):
@@ -424,3 +523,31 @@ def test_create_nonce_account_generated_key_permissions(tmp_path, monkeypatch):
     nonce_paths = list(tmp_path.glob("nonce_*.json"))
     assert len(nonce_paths) == 1
     assert stat.S_IMODE(nonce_paths[0].stat().st_mode) == 0o600
+
+
+def test_create_nonce_account_invalid_authority(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    _write_keypair(tmp_path / "nonce.json")
+    result = wallet.create_nonce_account(
+        str(tmp_path / "payer.json"),
+        str(tmp_path / "nonce.json"),
+        "not-a-valid-pubkey",
+    )
+    assert result is None
+    assert "Invalid authority address" in capsys.readouterr().out
+
+
+def test_create_nonce_account_invalid_blockhash(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    _write_keypair(tmp_path / "nonce.json")
+
+    with patch("rpc.rpc_call", return_value={"result": 1_447_680}), \
+         patch("rpc.get_recent_blockhash", return_value="not-a-valid-blockhash"):
+        result = wallet.create_nonce_account(
+            str(tmp_path / "payer.json"),
+            str(tmp_path / "nonce.json"),
+            None,
+        )
+
+    assert result is None
+    assert "Invalid blockhash" in capsys.readouterr().out
