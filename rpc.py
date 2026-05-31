@@ -39,7 +39,7 @@ def _extract_result(resp: dict):
     Solana RPC wraps some results in {"context":..., "value":...}.
     Others return the value directly. Handle both.
     """
-    if resp is None:
+    if not isinstance(resp, dict):
         return None
     r = resp.get("result")
     if isinstance(r, dict) and "value" in r:
@@ -58,9 +58,10 @@ def get_balance(address):
     if "error" in resp:
         log_err(f"RPC error: {rpc_error_message(resp['error'])}")
         return
-    lamports = resp.get("result", {})
-    if isinstance(lamports, dict):
-        lamports = lamports.get("value", 0)
+    lamports = _extract_result(resp)
+    if isinstance(lamports, bool) or not isinstance(lamports, int):
+        log_warn(f"Unexpected getBalance response: {json.dumps(resp)}")
+        return
     sol = lamports / 1_000_000_000
     print(f"\n  {GREEN}{BOLD}{address}{RESET}")
     print(f"  Balance: {BOLD}{sol:.9f} SOL{RESET}  ({lamports:,} lamports)\n")
@@ -141,7 +142,7 @@ def get_slot():
     if "error" in resp:
         log_err(f"RPC error: {resp['error']}"); return
     val = _extract_result(resp)
-    if val is not None:
+    if isinstance(val, int) and not isinstance(val, bool):
         print(f"\n  Current slot: {BOLD}{val:,}{RESET}\n")
     else:
         log_warn(f"Unexpected response: {json.dumps(resp)}")
@@ -154,7 +155,7 @@ def get_block_height():
     if "error" in resp:
         log_err(f"RPC error: {resp['error']}"); return
     val = _extract_result(resp)
-    if val is not None:
+    if isinstance(val, int) and not isinstance(val, bool):
         print(f"\n  Block height: {BOLD}{val:,}{RESET}\n")
     else:
         log_warn(f"Unexpected response: {json.dumps(resp)}")
@@ -167,7 +168,7 @@ def get_transaction_count():
     if "error" in resp:
         log_err(f"RPC error: {resp['error']}"); return
     val = _extract_result(resp)
-    if val is not None:
+    if isinstance(val, int) and not isinstance(val, bool):
         print(f"\n  Transaction count: {BOLD}{val:,}{RESET}\n")
     else:
         log_warn(f"Unexpected response: {json.dumps(resp)}")
@@ -194,9 +195,10 @@ def _print_sol_balance(sol_resp: dict | None) -> None:
     if not (sol_resp and "result" in sol_resp):
         log_warn("Could not fetch SOL balance")
         return
-    lamports = sol_resp["result"]
-    if isinstance(lamports, dict):
-        lamports = lamports.get("value", 0)
+    lamports = _extract_result(sol_resp)
+    if isinstance(lamports, bool) or not isinstance(lamports, int):
+        log_warn(f"Unexpected getBalance response: {json.dumps(sol_resp)}")
+        return
     sol = lamports / 1_000_000_000
     print(f"  {BOLD}SOL Balance:{RESET}  {BOLD}{sol:.9f} SOL{RESET}  {DIM}({lamports:,} lamports){RESET}")
 
@@ -205,7 +207,10 @@ def _print_spl_tokens(token_resp: dict | None) -> None:
     if not (token_resp and "result" in token_resp):
         log_warn("Could not fetch SPL token accounts")
         return
-    accounts = token_resp["result"]["value"]
+    accounts = _extract_result(token_resp)
+    if not isinstance(accounts, list):
+        log_warn(f"Unexpected getTokenAccountsByOwner response: {json.dumps(token_resp)}")
+        return
     if not accounts:
         print(f"  {DIM}No SPL token accounts{RESET}")
         return
@@ -295,12 +300,19 @@ def send_transaction(signed_tx_b64):
 def simulate_transaction(signed_tx_b64):
     resp = rpc_call("simulateTransaction", [signed_tx_b64, {"encoding": "base64"}])
     if resp and "result" in resp:
-        sim = resp["result"]["value"]
+        sim = _extract_result(resp)
+        if not isinstance(sim, dict):
+            log_warn(f"Unexpected simulateTransaction response: {json.dumps(resp)}")
+            return
         if sim.get("err"):
             log_warn(f"Simulation error: {sim['err']}")
         else:
             log_ok("Simulation successful")
-        for line in sim.get("logs", []):
+        logs = sim.get("logs") or []
+        if not isinstance(logs, list):
+            log_warn(f"Unexpected simulateTransaction logs: {json.dumps(logs)}")
+            return
+        for line in logs:
             print(f"  {DIM}{line}{RESET}")
         print()
 

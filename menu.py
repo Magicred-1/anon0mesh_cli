@@ -218,7 +218,9 @@ def _fetch_balance_sol(pubkey: str) -> float | None:
         return None
     lamps = resp["result"]
     if isinstance(lamps, dict):
-        lamps = lamps.get("value", 0)
+        lamps = lamps.get("value")
+    if isinstance(lamps, bool) or not isinstance(lamps, int):
+        return None
     return lamps / 1_000_000_000
 
 

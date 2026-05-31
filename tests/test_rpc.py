@@ -38,6 +38,10 @@ def test_extract_result_value_none():
     assert rpc._extract_result({"result": {"value": None}}) is None
 
 
+def test_extract_result_non_object_response():
+    assert rpc._extract_result(["not", "an", "object"]) is None
+
+
 # ── get_balance ────────────────────────────────────────────────────────────────
 
 def test_get_balance_value_dict(mock_pool, capsys):
@@ -82,6 +86,12 @@ def test_get_balance_none_response(mock_pool, capsys):
     capsys.readouterr()
 
 
+def test_get_balance_malformed_result(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": "not-lamports"}
+    rpc.get_balance("addr1")
+    assert "Unexpected getBalance response" in capsys.readouterr().out
+
+
 # ── get_slot ───────────────────────────────────────────────────────────────────
 
 def test_get_slot_ok(mock_pool, capsys):
@@ -102,6 +112,12 @@ def test_get_slot_error(mock_pool, capsys):
     assert "RPC error" in capsys.readouterr().out
 
 
+def test_get_slot_malformed_result(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": "not-a-slot"}
+    rpc.get_slot()
+    assert "Unexpected response" in capsys.readouterr().out
+
+
 # ── get_block_height ──────────────────────────────────────────────────────────
 
 def test_get_block_height_ok(mock_pool, capsys):
@@ -116,6 +132,12 @@ def test_get_block_height_none(mock_pool, capsys):
     assert "No response" in capsys.readouterr().out
 
 
+def test_get_block_height_malformed_result(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": "not-a-height"}
+    rpc.get_block_height()
+    assert "Unexpected response" in capsys.readouterr().out
+
+
 # ── get_transaction_count ─────────────────────────────────────────────────────
 
 def test_get_transaction_count_ok(mock_pool, capsys):
@@ -128,6 +150,12 @@ def test_get_transaction_count_none(mock_pool, capsys):
     mock_pool.call.return_value = None
     rpc.get_transaction_count()
     assert "No response" in capsys.readouterr().out
+
+
+def test_get_transaction_count_malformed_result(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": "not-a-count"}
+    rpc.get_transaction_count()
+    assert "Unexpected response" in capsys.readouterr().out
 
 
 # ── get_recent_blockhash ──────────────────────────────────────────────────────
@@ -148,6 +176,18 @@ def test_get_recent_blockhash_none(mock_pool):
 def test_get_recent_blockhash_error(mock_pool):
     mock_pool.call.return_value = {"error": {"message": "unavailable"}}
     assert rpc.get_recent_blockhash() is None
+
+
+# ── wallet detail formatting ──────────────────────────────────────────────────
+
+def test_print_sol_balance_malformed_result(capsys):
+    rpc._print_sol_balance({"result": {"value": "not-lamports"}})
+    assert "Unexpected getBalance response" in capsys.readouterr().out
+
+
+def test_print_spl_tokens_malformed_result(capsys):
+    rpc._print_spl_tokens({"result": {"value": "not-a-list"}})
+    assert "Unexpected getTokenAccountsByOwner response" in capsys.readouterr().out
 
 
 # ── get_beacon_pubkey ─────────────────────────────────────────────────────────
@@ -256,6 +296,18 @@ def test_simulate_transaction_error(mock_pool, capsys):
     }
     rpc.simulate_transaction("b64tx")
     assert "Simulation error" in capsys.readouterr().out
+
+
+def test_simulate_transaction_malformed_result(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": {"value": "not-an-object"}}
+    rpc.simulate_transaction("b64tx")
+    assert "Unexpected simulateTransaction response" in capsys.readouterr().out
+
+
+def test_simulate_transaction_malformed_logs(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": {"value": {"err": None, "logs": "not-a-list"}}}
+    rpc.simulate_transaction("b64tx")
+    assert "Unexpected simulateTransaction logs" in capsys.readouterr().out
 
 
 # ── get_nonce_account ─────────────────────────────────────────────────────────
