@@ -814,6 +814,7 @@ from solders.hash    import Hash
 RPC       = os.environ["ANON0MESH_RPC"]
 SAVE_DIR  = os.environ["ANON0MESH_DIR"]
 NONCE_LEN = 80  # fixed by the Solana runtime
+MAX_U64   = (1 << 64) - 1
 
 def rpc(method, params):
     r = requests.post(
@@ -824,10 +825,25 @@ def rpc(method, params):
     )
     r.raise_for_status()
     d = r.json()
+    if not isinstance(d, dict):
+        raise RuntimeError(f"{method} returned a non-object response")
     if "error" in d:
-        raise RuntimeError(d["error"].get("message", str(d["error"]))
-                           if isinstance(d["error"], dict) else str(d["error"]))
-    return d
+        error = d["error"]
+        raise RuntimeError(error.get("message", str(error))
+                           if isinstance(error, dict) else str(error))
+    if "result" not in d:
+        raise RuntimeError(f"{method} response is missing result")
+    return d["result"]
+
+def require_u64(value, label):
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_U64:
+        raise RuntimeError(f"{label} must be a u64 integer")
+    return value
+
+def require_string(value, label):
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(f"{label} must be a non-empty string")
+    return value
 
 try:
     with open(os.environ["ANON0MESH_KP_PATH"]) as f:
@@ -844,9 +860,14 @@ try:
     nonce_pub = nonce_kp.pubkey()
     print(f"  Nonce keypair:  {nonce_pub}", file=sys.stderr)
 
-    rent      = rpc("getMinimumBalanceForRentExemption", [NONCE_LEN])["result"]
+    rent      = require_u64(rpc("getMinimumBalanceForRentExemption", [NONCE_LEN]), "rent")
     print(f"  Rent required:  {rent} lamports", file=sys.stderr)
-    blockhash = rpc("getLatestBlockhash", [])["result"]["value"]["blockhash"]
+    latest    = rpc("getLatestBlockhash", [])
+    try:
+        blockhash = latest["value"]["blockhash"]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError(f"getLatestBlockhash returned an unexpected result: {exc}") from exc
+    blockhash = require_string(blockhash, "blockhash")
 
     create_ix = create_account(CreateAccountParams(
         from_pubkey = payer_pub,
@@ -865,8 +886,11 @@ try:
     tx.sign([payer, nonce_kp], bh)
 
     print("  Sending transaction...", file=sys.stderr)
-    sig = rpc("sendTransaction", [base64.b64encode(bytes(tx)).decode(),
-                                  {"encoding": "base64"}])["result"]
+    sig = require_string(
+        rpc("sendTransaction", [base64.b64encode(bytes(tx)).decode(),
+                                {"encoding": "base64"}]),
+        "signature",
+    )
 
     # KEY=VALUE to stdout — captured by the shell
     print(f"NONCE_PUBKEY={nonce_pub}")
