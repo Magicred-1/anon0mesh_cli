@@ -122,11 +122,17 @@ def test_config_value_is_safe_rejects_control_characters(tmp_path, name):
     assert result.returncode != 0
 
 
-def test_rnode_port_is_validated_after_interactive_selection():
+def test_rnode_environment_port_is_validated_before_rendering():
     setup = SETUP.read_text()
 
-    assert setup.index('! config_value_is_safe "$RNODE_PORT"') > setup.index('RNODE_PORT="$manual_port"')
-    assert setup.index('! config_value_is_safe "$RNODE_PORT"') < setup.index('port              = ${RNODE_PORT}')
+    assert setup.index('! config_value_is_safe "$RNODE_PORT"') < setup.index("Using RNode serial device")
+
+
+def test_rnode_selected_port_is_validated_before_config_append():
+    setup = SETUP.read_text()
+
+    assert setup.rindex('! config_value_is_safe "$RNODE_PORT"') > setup.index('RNODE_PORT="$manual_port"')
+    assert setup.rindex('! config_value_is_safe "$RNODE_PORT"') < setup.index('port              = ${RNODE_PORT}')
 
 
 def test_setup_inline_python_receives_filesystem_paths_through_env():

@@ -440,6 +440,11 @@ if [[ "$INSTALL_RNODE" == true ]]; then
     done < <(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || true)
   fi
 
+  if [[ -n "$RNODE_PORT" ]] && ! config_value_is_safe "$RNODE_PORT"; then
+    log_warn "Skipping RNode setup — serial port contains control characters."
+    RNODE_PORT=""
+  fi
+
   if [[ -n "$RNODE_PORT" ]]; then
     log_info "Using RNode serial device from ANONMESH_RNODE_PORT: $RNODE_PORT"
   elif [[ ${#SERIAL_DEVICES[@]} -eq 0 ]]; then
