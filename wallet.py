@@ -16,7 +16,7 @@ from pathlib import Path
 
 import state
 from shared import (
-    log_info, log_ok, log_warn, log_err, rpc_error_message,
+    log_info, log_ok, log_warn, log_err, rpc_error_message, terminal_safe_text,
     BOLD, GREEN, YELLOW, RED, RESET, DIM,
 )
 
@@ -712,7 +712,7 @@ def create_nonce_account(
     print(f"  Nonce account pubkey: {BOLD}{nonce_pubkey}{RESET}")
     print(f"  Authority:            {authority_pubkey}")
     print(f"  Funded:               {rent_lamports:,} lamports")
-    print(f"  Signature:            {sig}")
+    print(f"  Signature:            {terminal_safe_text(sig)}")
     print(f"\n  {DIM}Fetch the nonce value:      get-nonce {nonce_pubkey}{RESET}")
     print(f"  {DIM}Sign with nonce:  sign-nonce-tx <payer> {nonce_pubkey} <auth> <to> <lamports>{RESET}\n")
     return str(nonce_pubkey)

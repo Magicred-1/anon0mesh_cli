@@ -11,7 +11,7 @@ import concurrent.futures
 
 import state
 from shared import (
-    is_u64, log_info, log_ok, log_warn, log_err, rpc_error_message,
+    is_u64, log_info, log_ok, log_warn, log_err, rpc_error_message, terminal_safe_text,
     BOLD, CYAN, GREEN, RED, RESET, DIM,
 )
 
@@ -59,7 +59,7 @@ def get_balance(address):
         log_warn(f"Unexpected getBalance response: {json.dumps(resp)}")
         return
     sol = lamports / 1_000_000_000
-    print(f"\n  {GREEN}{BOLD}{address}{RESET}")
+    print(f"\n  {GREEN}{BOLD}{terminal_safe_text(address)}{RESET}")
     print(f"  Balance: {BOLD}{sol:.9f} SOL{RESET}  ({lamports:,} lamports)\n")
 
 
@@ -119,7 +119,7 @@ def get_recent_blockhash() -> str | None:
         val = r.get("value", r)
         bh  = val.get("blockhash") if isinstance(val, dict) else None
         if _is_nonempty_string(bh):
-            print(f"\n  Latest blockhash: {BOLD}{bh}{RESET}\n")
+            print(f"\n  Latest blockhash: {BOLD}{terminal_safe_text(bh)}{RESET}\n")
             return bh
     log_warn(f"Unexpected response: {json.dumps(resp)}")
     return None
@@ -164,7 +164,7 @@ def _print_spl_tokens(token_resp: dict | None) -> None:
             ):
                 raise TypeError("unexpected token account field type")
             symbol   = f"  {DIM}({decimals} decimals){RESET}" if decimals else ""
-            print(f"  {DIM}·{RESET} {mint}  {BOLD}{amount}{RESET}{symbol}")
+            print(f"  {DIM}·{RESET} {terminal_safe_text(mint)}  {BOLD}{terminal_safe_text(amount)}{RESET}{symbol}")
         except (KeyError, TypeError):
             print(f"  {DIM}· (could not parse account){RESET}")
 
@@ -184,7 +184,7 @@ def get_token_accounts(owner):
             log_err(f"Wallet detail query failed: {exc}")
             return
 
-    print(f"\n  {GREEN}{BOLD}{owner}{RESET}")
+    print(f"\n  {GREEN}{BOLD}{terminal_safe_text(owner)}{RESET}")
     _print_sol_balance(sol_resp)
     _print_spl_tokens(token_resp)
     print()
@@ -230,7 +230,7 @@ def cosign_and_send(partial_tx_b64: str, arcium_meta: dict | None = None) -> str
         log_warn(f"Unexpected cosignTransaction response: {json.dumps(resp)}")
         return None
     log_ok("Co-signed transaction relayed via beacon!")
-    print(f"\n  Signature: {BOLD}{GREEN}{sig}{RESET}\n")
+    print(f"\n  Signature: {BOLD}{GREEN}{terminal_safe_text(sig)}{RESET}\n")
     return sig
 
 
@@ -250,7 +250,7 @@ def send_transaction(signed_tx_b64):
         log_warn(f"Unexpected sendTransaction response: {json.dumps(resp)}")
         return
     log_ok("Transaction relayed via mesh!")
-    print(f"\n  Signature: {BOLD}{GREEN}{signature}{RESET}\n")
+    print(f"\n  Signature: {BOLD}{GREEN}{terminal_safe_text(signature)}{RESET}\n")
 
 
 def simulate_transaction(signed_tx_b64):
@@ -273,7 +273,7 @@ def simulate_transaction(signed_tx_b64):
         log_warn(f"Unexpected simulateTransaction logs: {json.dumps(logs)}")
         return
     for line in logs:
-        print(f"  {DIM}{line}{RESET}")
+        print(f"  {DIM}{terminal_safe_text(line)}{RESET}")
     print()
 
 
@@ -319,7 +319,7 @@ def get_nonce_account(nonce_pubkey_str: str) -> dict | None:
         log_warn('Confirm this is a nonce account: raw getAccountInfo ["<pubkey>",{"encoding":"jsonParsed"}]')
         return None
 
-    print(f"\n  {GREEN}{BOLD}{nonce_pubkey_str}{RESET}  {DIM}(durable nonce account){RESET}")
-    print(f"  Nonce value (use as blockhash): {BOLD}{nonce_val}{RESET}")
-    print(f"  Authority:                      {authority}\n")
+    print(f"\n  {GREEN}{BOLD}{terminal_safe_text(nonce_pubkey_str)}{RESET}  {DIM}(durable nonce account){RESET}")
+    print(f"  Nonce value (use as blockhash): {BOLD}{terminal_safe_text(nonce_val)}{RESET}")
+    print(f"  Authority:                      {terminal_safe_text(authority)}\n")
     return {"nonce": nonce_val, "authority": authority}

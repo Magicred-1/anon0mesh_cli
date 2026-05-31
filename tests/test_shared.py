@@ -114,6 +114,10 @@ def test_rpc_error_message_accepts_scalar_error():
     assert shared.rpc_error_message("busy") == "busy"
 
 
+def test_terminal_safe_text_escapes_control_bytes():
+    assert shared.terminal_safe_text("before\x1b[2J\nafter") == r"before\x1b[2J\x0aafter"
+
+
 # ── numeric parsing ───────────────────────────────────────────────────────────
 
 def test_positive_int_accepts_positive_value():
@@ -268,3 +272,10 @@ def test_log_err_contains_cross(capsys):
 def test_log_warn_contains_warning_symbol(capsys):
     shared.log_warn("watch out")
     assert "⚠" in capsys.readouterr().out
+
+
+def test_log_warn_escapes_terminal_control_bytes(capsys):
+    shared.log_warn("before\x1b[2Jafter")
+    output = capsys.readouterr().out
+    assert r"before\x1b[2Jafter" in output
+    assert "\x1b[2J" not in output

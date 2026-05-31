@@ -100,13 +100,24 @@ def redact_urls(text: str) -> str:
     return _URL_RE.sub(lambda match: redact_url(match.group(0)), text)
 
 
+_TERMINAL_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def terminal_safe_text(value: Any) -> str:
+    """Escape terminal control bytes before rendering untrusted text."""
+    return _TERMINAL_CONTROL_RE.sub(
+        lambda match: f"\\x{ord(match.group(0)):02x}",
+        str(value),
+    )
+
+
 def rpc_error_message(error: Any, default: str = "?") -> str:
     """Format a JSON-RPC error whether the peer returned an object or scalar."""
     if isinstance(error, dict):
-        return str(error.get("message", error))
+        return terminal_safe_text(error.get("message", error))
     if error is None:
-        return default
-    return str(error)
+        return terminal_safe_text(default)
+    return terminal_safe_text(error)
 
 
 def positive_int(raw_value: str) -> int:
@@ -228,12 +239,12 @@ def set_quiet(quiet: bool) -> None:
 
 def log_info(msg: str)  -> None:
     if not _quiet_mode:
-        print(f"{DIM}[{time.strftime('%H:%M:%S')}]{RESET} {CYAN}ℹ {msg}{RESET}")
+        print(f"{DIM}[{time.strftime('%H:%M:%S')}]{RESET} {CYAN}ℹ {terminal_safe_text(msg)}{RESET}")
 
-def log_ok(msg: str)    -> None: print(f"{DIM}[{time.strftime('%H:%M:%S')}]{RESET} {GREEN}✔ {msg}{RESET}")
-def log_warn(msg: str)  -> None: print(f"{DIM}[{time.strftime('%H:%M:%S')}]{RESET} {YELLOW}⚠ {msg}{RESET}")
-def log_err(msg: str)   -> None: print(f"{DIM}[{time.strftime('%H:%M:%S')}]{RESET} {RED}✘ {msg}{RESET}")
+def log_ok(msg: str)    -> None: print(f"{DIM}[{time.strftime('%H:%M:%S')}]{RESET} {GREEN}✔ {terminal_safe_text(msg)}{RESET}")
+def log_warn(msg: str)  -> None: print(f"{DIM}[{time.strftime('%H:%M:%S')}]{RESET} {YELLOW}⚠ {terminal_safe_text(msg)}{RESET}")
+def log_err(msg: str)   -> None: print(f"{DIM}[{time.strftime('%H:%M:%S')}]{RESET} {RED}✘ {terminal_safe_text(msg)}{RESET}")
 
 def log_tx(msg: str)    -> None:
     if not _quiet_mode:
-        print(f"{DIM}[{time.strftime('%H:%M:%S')}]{RESET} {BOLD}➤ {msg}{RESET}")
+        print(f"{DIM}[{time.strftime('%H:%M:%S')}]{RESET} {BOLD}➤ {terminal_safe_text(msg)}{RESET}")

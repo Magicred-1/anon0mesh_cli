@@ -67,6 +67,14 @@ def test_broadcast_with_retry_accepts_string_signature(monkeypatch, capsys):
     assert "Signature:" in capsys.readouterr().out
 
 
+def test_broadcast_with_retry_escapes_terminal_control_bytes(monkeypatch, capsys):
+    monkeypatch.setattr(menu, "rpc_call", lambda *_: {"result": "before\x1b[2Jafter"})
+    menu._broadcast_with_retry("transaction")
+    output = capsys.readouterr().out
+    assert r"before\x1b[2Jafter" in output
+    assert "\x1b[2J" not in output
+
+
 def test_broadcast_with_retry_handles_scalar_error(monkeypatch, capsys):
     monkeypatch.setattr(menu, "rpc_call", lambda *_: {"error": "busy"})
     menu._broadcast_with_retry("transaction")

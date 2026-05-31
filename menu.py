@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation
 
 import state
 from shared import (
-    is_u64, log_info, log_ok, log_warn, log_err, rpc_error_message,
+    is_u64, log_info, log_ok, log_warn, log_err, rpc_error_message, terminal_safe_text,
     BOLD, CYAN, GREEN, YELLOW, RED, RESET, DIM,
     set_quiet,
 )
@@ -343,8 +343,9 @@ def _broadcast_with_retry(tx_b64: str) -> None:
             resp = rpc_call("sendTransaction", [tx_b64, {"encoding": "base64"}])
             signature = resp.get("result") if isinstance(resp, dict) else None
             if isinstance(signature, str) and signature:
-                sp.done(f"Confirmed  sig: {signature[:20]}…")
-                print(f"\n  {GREEN}{BOLD}Signature:{RESET} {signature}\n")
+                safe_signature = terminal_safe_text(signature)
+                sp.done(f"Confirmed  sig: {safe_signature[:20]}…")
+                print(f"\n  {GREEN}{BOLD}Signature:{RESET} {safe_signature}\n")
                 return
             error = resp.get("error") if isinstance(resp, dict) else None
             err = rpc_error_message(error, default="no response")

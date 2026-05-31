@@ -37,7 +37,7 @@ import state
 from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     RNS_REQUEST_TIMEOUT, build_rpc, decode_json, decompress_response,
-    restrict_private_file_permissions,
+    restrict_private_file_permissions, terminal_safe_text,
     log_info, log_ok, log_warn, log_err,
     BOLD, GREEN, RED, RESET, DIM,
 )
@@ -431,7 +431,7 @@ class BeaconPool:
             lines.append("  (empty)")
         for bl in items:
             dot = f"{GREEN}●{RESET}" if bl.active else f"{RED}○{RESET}"
-            lines.append(f"  {dot}  {BOLD}{bl.label}{RESET}  {DIM}{bl.dest_hash_hex}{RESET}")
+            lines.append(f"  {dot}  {BOLD}{terminal_safe_text(bl.label)}{RESET}  {DIM}{bl.dest_hash_hex}{RESET}")
         lines.append("")
         return "\n".join(lines)
 

@@ -400,6 +400,16 @@ def test_simulate_transaction_rejects_non_string_log(mock_pool, capsys):
     assert "Unexpected simulateTransaction logs" in capsys.readouterr().out
 
 
+def test_simulate_transaction_escapes_terminal_control_bytes(mock_pool, capsys):
+    mock_pool.call.return_value = {
+        "result": {"value": {"err": None, "logs": ["before\x1b[2Jafter"]}}
+    }
+    rpc.simulate_transaction("b64tx")
+    output = capsys.readouterr().out
+    assert r"before\x1b[2Jafter" in output
+    assert "\x1b[2J" not in output
+
+
 # ── get_nonce_account ─────────────────────────────────────────────────────────
 
 _NONCE_RESP = {
