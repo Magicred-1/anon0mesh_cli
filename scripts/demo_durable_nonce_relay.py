@@ -27,7 +27,6 @@ from __future__ import annotations
 import sys
 import os
 import time
-import json
 import base64
 import argparse
 import tempfile
@@ -66,6 +65,7 @@ from shared import (
     BOLD, CYAN, GREEN, YELLOW, RED, DIM, RESET,
 )
 from mesh import BeaconPool, BeaconAnnounceHandler, start_reticulum
+from wallet import _load_private_keypair, _save_private_keypair
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 NONCE_ACCOUNT_LENGTH = 80
@@ -138,8 +138,7 @@ def step_generate_keypair(tmpdir: str) -> tuple[Keypair, str]:
     """Generate an ephemeral keypair for the demo."""
     kp = Keypair()
     path = os.path.join(tmpdir, "demo_wallet.json")
-    with open(path, "w") as f:
-        json.dump(list(bytes(kp)), f)
+    _save_private_keypair(path, kp)
     log_ok(f"Ephemeral keypair: {kp.pubkey()}")
     return kp, path
 
@@ -180,8 +179,7 @@ def step_create_nonce(payer: Keypair, tmpdir: str, timer: Timer) -> tuple[Keypai
 
     nonce_kp = Keypair()
     nonce_path = os.path.join(tmpdir, "demo_nonce.json")
-    with open(nonce_path, "w") as f:
-        json.dump(list(bytes(nonce_kp)), f)
+    _save_private_keypair(nonce_path, nonce_kp)
 
     payer_pubkey = payer.pubkey()
     nonce_pubkey = nonce_kp.pubkey()
@@ -464,9 +462,7 @@ def main():
         print(f"\n  {BOLD}{CYAN}━━━ Step 1: Generate Keypair ━━━{RESET}")
         t0 = time.monotonic()
         if args.keypair:
-            with open(args.keypair, "r") as f:
-                kp_bytes = bytes(json.load(f))
-            payer = Keypair.from_bytes(kp_bytes)
+            payer = _load_private_keypair(args.keypair)
             wallet_path = args.keypair
             log_ok(f"Loaded keypair: {payer.pubkey()}")
         else:
