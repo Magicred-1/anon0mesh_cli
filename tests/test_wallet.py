@@ -107,6 +107,19 @@ def test_generate_wallet_bad_path(capsys):
     assert "Failed to save" in capsys.readouterr().out
 
 
+def test_generate_wallet_refuses_symlink_target(tmp_path, capsys):
+    target = tmp_path / "keep.txt"
+    target.write_text("keep")
+    path = tmp_path / "wallet.json"
+    path.symlink_to(target)
+
+    result = wallet.generate_wallet(str(path))
+
+    assert result is None
+    assert target.read_text() == "keep"
+    assert "Failed to save" in capsys.readouterr().out
+
+
 # ── import_wallet ─────────────────────────────────────────────────────────────
 
 def test_import_wallet_hex64(tmp_path):

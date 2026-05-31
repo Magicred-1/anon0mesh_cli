@@ -54,7 +54,8 @@ def _validate_u64(value: int, label: str) -> bool:
 
 def _save_private_keypair(path: str, keypair: "Keypair") -> None:
     """Write a Solana keypair with owner-only permissions, including overwrites."""
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
     try:
         os.fchmod(fd, 0o600)
         file_obj = os.fdopen(fd, "w")

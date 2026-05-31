@@ -14,6 +14,10 @@ NETWORK="${ANONMESH_NETWORK:-devnet}"
 ensure_state_dir() {
   mkdir -p "$STATE_DIR"
   chmod 700 "$STATE_DIR"
+  if [[ -L "$PID_FILE" || -L "$LOG_FILE" ]]; then
+    echo "refusing symlinked headless-node state file in $STATE_DIR" >&2
+    exit 1
+  fi
   [[ ! -f "$PID_FILE" ]] || chmod 600 "$PID_FILE"
   [[ ! -f "$LOG_FILE" ]] || chmod 600 "$LOG_FILE"
 }

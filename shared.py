@@ -18,6 +18,7 @@ Reticulum handles all encryption (X25519 + AES-256-GCM) automatically.
 import json
 import os
 import re
+import tempfile
 import time
 import zlib
 from typing import Any
@@ -158,11 +159,29 @@ def restrict_private_file_permissions(path: str) -> None:
 
 
 def save_private_identity(identity: Any, path: str) -> None:
-    """Persist an RNS identity without exposing it through the process umask."""
+    """Atomically persist an RNS identity without following a destination symlink."""
+    directory = os.path.dirname(path) or "."
+    prefix = f".{os.path.basename(path)}."
     previous_umask = os.umask(0o077)
+    fd = -1
+    temp_path = ""
     try:
-        identity.to_file(path)
+        fd, temp_path = tempfile.mkstemp(prefix=prefix, dir=directory)
+        os.close(fd)
+        fd = -1
+        if identity.to_file(temp_path) is False:
+            raise OSError("Could not save RNS identity")
+        restrict_private_file_permissions(temp_path)
+        os.replace(temp_path, path)
+        temp_path = ""
     finally:
+        if fd != -1:
+            os.close(fd)
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
         os.umask(previous_umask)
     restrict_private_file_permissions(path)
 

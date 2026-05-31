@@ -58,6 +58,27 @@ def test_launcher_repairs_existing_state_permissions(tmp_path):
     assert stat.S_IMODE(log_file.stat().st_mode) == 0o600
 
 
+def test_launcher_refuses_symlinked_state_file(tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    target = tmp_path / "keep.txt"
+    target.write_text("keep")
+    (state_dir / "headless-node.log").symlink_to(target)
+    env = {**os.environ, "ANONMESH_STATE_DIR": str(state_dir)}
+
+    result = subprocess.run(
+        [str(LAUNCHER), "status"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert "refusing symlinked headless-node state file" in result.stderr
+    assert target.read_text() == "keep"
+
+
 def test_stop_clears_stale_pid_without_signalling_unrelated_process(tmp_path):
     sleeper = subprocess.Popen(["sleep", "30"])
     try:

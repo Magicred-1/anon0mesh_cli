@@ -190,6 +190,37 @@ def test_save_private_identity_uses_owner_only_permissions(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_save_private_identity_replaces_symlink_without_touching_target(tmp_path):
+    target = tmp_path / "keep.txt"
+    target.write_text("keep")
+    path = tmp_path / "identity"
+    path.symlink_to(target)
+
+    class FakeIdentity:
+        def to_file(self, output_path):
+            Path(output_path).write_text("secret")
+
+    shared.save_private_identity(FakeIdentity(), str(path))
+
+    assert not path.is_symlink()
+    assert path.read_text() == "secret"
+    assert target.read_text() == "keep"
+
+
+def test_save_private_identity_cleans_up_failed_temporary_file(tmp_path):
+    path = tmp_path / "identity"
+
+    class FailedIdentity:
+        def to_file(self, output_path):
+            return False
+
+    with pytest.raises(OSError, match="Could not save RNS identity"):
+        shared.save_private_identity(FailedIdentity(), str(path))
+
+    assert not path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_load_dotenv_private_repairs_permissions_and_preserves_existing_env(
     tmp_path, monkeypatch,
 ):
