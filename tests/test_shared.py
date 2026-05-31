@@ -59,6 +59,12 @@ def test_build_response_error():
     assert "result" not in payload
 
 
+def test_build_response_empty_error_is_still_error():
+    payload = json.loads(shared.build_response(error=""))
+    assert payload["error"]["message"] == ""
+    assert "result" not in payload
+
+
 def test_build_response_req_id():
     payload = json.loads(shared.build_response(result=1, req_id=99))
     assert payload["id"] == 99

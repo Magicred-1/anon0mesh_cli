@@ -60,7 +60,7 @@ def build_rpc(method: str, params: list | None = None, req_id: int = 1) -> bytes
 
 def build_response(result: Any = None, error: str | None = None, req_id: int = 1) -> bytes:
     """Encode a JSON-RPC 2.0 response as bytes."""
-    if error:
+    if error is not None:
         payload = {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32000, "message": error}}
     else:
         payload = {"jsonrpc": "2.0", "id": req_id, "result": result}
