@@ -192,6 +192,18 @@ def test_load_dotenv_private_repairs_permissions_and_preserves_existing_env(
     assert os.environ["EXISTING_TEST_VALUE"] == "from-process"
 
 
+def test_load_dotenv_private_skips_invalid_entries(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    path.write_text("=empty-key\nINVALID-NAME=value\nNUL_VALUE=bad\x00value\nVALID_NAME=loaded\n")
+    monkeypatch.delenv("VALID_NAME", raising=False)
+
+    shared.load_dotenv_private(path)
+
+    assert os.environ["VALID_NAME"] == "loaded"
+    assert "INVALID-NAME" not in os.environ
+    assert "NUL_VALUE" not in os.environ
+
+
 # ── response compression ──────────────────────────────────────────────────────
 
 def test_compressed_response_roundtrip():

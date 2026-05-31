@@ -162,6 +162,9 @@ def save_private_identity(identity: Any, path: str) -> None:
     restrict_private_file_permissions(path)
 
 
+_ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 def load_dotenv_private(path: str | os.PathLike[str]) -> None:
     """Load simple KEY=VALUE entries after restricting the credential file."""
     path_str = os.fspath(path)
@@ -173,7 +176,10 @@ def load_dotenv_private(path: str | os.PathLike[str]) -> None:
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 key, value = line.split("=", 1)
-                os.environ.setdefault(key.strip(), value.strip())
+                key = key.strip()
+                value = value.strip()
+                if _ENV_KEY_RE.fullmatch(key) and "\x00" not in value:
+                    os.environ.setdefault(key, value)
 
 
 # ── Mesh payload compression ─────────────────────────────────────────────────
