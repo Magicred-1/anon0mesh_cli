@@ -5,6 +5,7 @@ Shim subprocess calls are mocked; no Node.js required.
 
 import asyncio
 import json
+import stat
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -255,6 +256,29 @@ def test_arcium_beacon_from_env_no_solana_package_disables(monkeypatch):
     with patch.object(arcium_client, "HAS_SOLANA", False):
         beacon = arcium_client.ArciumBeacon.from_env()
     assert not beacon.enabled
+
+
+def test_arcium_beacon_from_env_repairs_payer_permissions(tmp_path, monkeypatch):
+    path = tmp_path / "payer.json"
+    path.write_text("[1, 2, 3]")
+    path.chmod(0o666)
+    keypair_type = MagicMock()
+    keypair_type.from_bytes.return_value = object()
+    monkeypatch.setenv("ARCIUM_ENABLED", "1")
+    monkeypatch.setenv("ARCIUM_PAYER_KEYPAIR", str(path))
+    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", "ab")
+    monkeypatch.setenv("ARCIUM_CLUSTER_OFFSET", "456")
+    monkeypatch.setattr(arcium_client, "HAS_SOLANA", True)
+    monkeypatch.setattr(arcium_client, "Keypair", keypair_type)
+
+    with (
+        patch.object(arcium_client, "ArciumBeaconClient", return_value=object()),
+        patch.object(arcium_client.ArciumBeacon, "__init__", return_value=None),
+    ):
+        arcium_client.ArciumBeacon.from_env()
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    keypair_type.from_bytes.assert_called_once_with(bytes([1, 2, 3]))
 
 
 # ── constants ─────────────────────────────────────────────────────────────────

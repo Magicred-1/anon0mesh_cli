@@ -80,7 +80,7 @@ from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT,
     decode_json, build_response, compress_response, redact_url, rpc_error_message,
-    positive_int, restrict_private_file_permissions, save_private_identity,
+    load_dotenv_private, positive_int, restrict_private_file_permissions, save_private_identity,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
     BOLD, CYAN, GREEN, RESET, DIM,
 )
@@ -88,12 +88,7 @@ from shared import (
 # ── Auto-load .env if present ─────────────────────────────────────────────────
 from pathlib import Path
 _env_file = Path(__file__).parent / ".env"
-if _env_file.exists():
-    for _line in _env_file.read_text().splitlines():
-        _line = _line.strip()
-        if _line and not _line.startswith("#") and "=" in _line:
-            _k, _v = _line.split("=", 1)
-            os.environ.setdefault(_k.strip(), _v.strip())
+load_dotenv_private(_env_file)
 
 # ── Arcium MPC integration (optional — enabled via ARCIUM_ENABLED=1) ───────────
 try:
@@ -528,7 +523,9 @@ def _load_cosign_keypair() -> None:
         log_info("ARCIUM_PAYER_KEYPAIR not set — cosignTransaction disabled")
         return
     try:
-        with open(os.path.expanduser(kp_path)) as f:
+        kp_path = os.path.expanduser(kp_path)
+        restrict_private_file_permissions(kp_path)
+        with open(kp_path) as f:
             beacon_cosign_keypair = _Keypair.from_bytes(bytes(json.load(f)))
         log_ok(f"Co-sign keypair ready: {beacon_cosign_keypair.pubkey()}")
     except Exception as exc:

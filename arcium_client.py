@@ -48,7 +48,10 @@ try:
 except ImportError:
     HAS_SOLANA = False
 
-from shared import log_info, log_ok, log_warn, log_err, redact_urls
+from shared import (
+    load_dotenv_private, restrict_private_file_permissions,
+    log_info, log_ok, log_warn, log_err, redact_urls,
+)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 # declare_id! in programs/ble-revshare/src/lib.rs + Anchor.toml [programs.devnet]
@@ -261,12 +264,7 @@ class ArciumBeacon:
     def from_env(cls) -> "ArciumBeacon":
         # Auto-load .env
         env_file = Path(__file__).parent / ".env"
-        if env_file.exists():
-            for line in env_file.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    os.environ.setdefault(k.strip(), v.strip())
+        load_dotenv_private(env_file)
 
         if os.getenv("ARCIUM_ENABLED", "0") != "1":
             log_info("Arcium disabled (ARCIUM_ENABLED != 1)")
@@ -291,6 +289,7 @@ class ArciumBeacon:
 
         try:
             kp_path = os.path.expanduser(required["ARCIUM_PAYER_KEYPAIR"])
+            restrict_private_file_permissions(kp_path)
             with open(kp_path) as f:
                 payer = Keypair.from_bytes(bytes(json.load(f)))
 

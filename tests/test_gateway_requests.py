@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import stat
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -47,6 +48,25 @@ def test_beacon_rejects_non_list_cosign_params_without_forwarding(monkeypatch):
     assert response["error"]["message"] == "cosignTransaction: params[0] must be a base64 tx"
     assert response["id"] == 7
     post.assert_not_called()
+
+
+def test_beacon_repairs_cosign_keypair_permissions(tmp_path, monkeypatch):
+    path = tmp_path / "payer.json"
+    path.write_text("[1, 2, 3]")
+    path.chmod(0o666)
+    fake_keypair = MagicMock()
+    fake_keypair.pubkey.return_value = "payer-pubkey"
+    keypair_type = MagicMock()
+    keypair_type.from_bytes.return_value = fake_keypair
+    monkeypatch.setattr(beacon, "HAS_SOLDERS", True)
+    monkeypatch.setattr(beacon, "_Keypair", keypair_type)
+    monkeypatch.setattr(beacon, "beacon_cosign_keypair", None)
+    monkeypatch.setenv("ARCIUM_PAYER_KEYPAIR", str(path))
+
+    beacon._load_cosign_keypair()
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    keypair_type.from_bytes.assert_called_once_with(bytes([1, 2, 3]))
 
 
 def test_beacon_connection_error_does_not_leak_rpc_credentials(monkeypatch, capsys):

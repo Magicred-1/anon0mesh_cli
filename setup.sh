@@ -518,7 +518,7 @@ if [[ "$INSTALL_BEACON" == true ]]; then
   cat > "$SCRIPT_DIR/run_beacon.sh" << LAUNCHER
 #!/usr/bin/env bash
 # anon0mesh Beacon launcher
-# Edit NETWORK and RPC_URL below to match your setup.
+# Set SOLANA_RPC_URL in the environment if you need a custom RPC endpoint.
 # ─────────────────────────────────────────────────────
 
 umask 077
@@ -527,17 +527,14 @@ source "\$SCRIPT_DIR/venv/bin/activate"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 NETWORK="${SOLANA_NETWORK}"          # devnet | mainnet | custom
-RPC_URL=""               # leave empty to use default public endpoint
-                         # or set e.g. https://my-node.helius-rpc.com/?api-key=XXX
 ANNOUNCE_INTERVAL=300    # seconds between re-announces after burst phase
 
 # ── Build args ─────────────────────────────────────────────────────────────
 ARGS=(--network "\$NETWORK" --announce-interval "\$ANNOUNCE_INTERVAL")
-[[ -n "\$RPC_URL" ]] && export SOLANA_RPC_URL="\$RPC_URL"
 
 exec python "\$SCRIPT_DIR/beacon.py" "\${ARGS[@]}" "\$@"
 LAUNCHER
-  chmod +x "$SCRIPT_DIR/run_beacon.sh"
+  chmod 700 "$SCRIPT_DIR/run_beacon.sh"
   log_ok "run_beacon.sh created"
 fi
 
@@ -580,7 +577,7 @@ CMD+=(--discover --strategy race)   # always keep discovery on for new beacons
 
 exec "\${CMD[@]}" "\${EXTRA_ARGS[@]}"
 LAUNCHER
-  chmod +x "$SCRIPT_DIR/run_client.sh"
+  chmod 700 "$SCRIPT_DIR/run_client.sh"
   log_ok "run_client.sh created"
 fi
 

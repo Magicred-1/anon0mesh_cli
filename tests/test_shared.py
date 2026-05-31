@@ -3,6 +3,7 @@ tests/test_shared.py — unit tests for shared.py
 """
 
 import json
+import os
 import stat
 import zlib
 from pathlib import Path
@@ -144,6 +145,22 @@ def test_save_private_identity_uses_owner_only_permissions(tmp_path):
 
     shared.save_private_identity(FakeIdentity(), str(path))
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_load_dotenv_private_repairs_permissions_and_preserves_existing_env(
+    tmp_path, monkeypatch,
+):
+    path = tmp_path / ".env"
+    path.write_text("NEW_TEST_VALUE=loaded\nEXISTING_TEST_VALUE=from-file\n")
+    path.chmod(0o666)
+    monkeypatch.delenv("NEW_TEST_VALUE", raising=False)
+    monkeypatch.setenv("EXISTING_TEST_VALUE", "from-process")
+
+    shared.load_dotenv_private(path)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert os.environ["NEW_TEST_VALUE"] == "loaded"
+    assert os.environ["EXISTING_TEST_VALUE"] == "from-process"
 
 
 # ── response compression ──────────────────────────────────────────────────────

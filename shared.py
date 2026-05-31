@@ -135,6 +135,20 @@ def save_private_identity(identity: Any, path: str) -> None:
     restrict_private_file_permissions(path)
 
 
+def load_dotenv_private(path: str | os.PathLike[str]) -> None:
+    """Load simple KEY=VALUE entries after restricting the credential file."""
+    path_str = os.fspath(path)
+    if not os.path.isfile(path_str):
+        return
+    restrict_private_file_permissions(path_str)
+    with open(path_str, encoding="utf-8") as env_file:
+        for line in env_file:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip())
+
+
 # ── Mesh payload compression ─────────────────────────────────────────────────
 # Solana RPC responses are typically 1–10 KB of JSON.  LoRa links have ~1.2 kbps
 # throughput with a Reticulum MTU of ~465 bytes.  Compressing before transmission

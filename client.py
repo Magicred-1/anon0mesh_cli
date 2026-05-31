@@ -33,14 +33,10 @@ import argparse
 from pathlib import Path
 
 # ── Load .env before any module imports that may read env vars ─────────────────
+from shared import load_dotenv_private
+
 _env = Path(__file__).parent / ".env"
-if _env.exists():
-    for _l in _env.read_text().splitlines():
-        _l = _l.strip()
-        if _l and not _l.startswith("#") and "=" in _l:
-            import os as _os
-            _k, _v = _l.split("=", 1)
-            _os.environ.setdefault(_k.strip(), _v.strip())
+load_dotenv_private(_env)
 
 # ── Module imports (after .env is loaded) ──────────────────────────────────────
 import state

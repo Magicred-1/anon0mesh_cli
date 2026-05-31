@@ -66,7 +66,7 @@ ANONMESH_RNODE_PORT=/dev/ttyUSB0 ANONMESH_RNODE_REGION=us \
 Create `.env` only if you need optional Arcium or wallet overrides:
 
 ```bash
-touch .env
+install -m 600 /dev/null .env
 ```
 
 Key variables:
