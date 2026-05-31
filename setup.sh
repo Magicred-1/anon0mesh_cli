@@ -20,6 +20,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
+umask 077
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 R="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"
@@ -301,6 +302,7 @@ fi
 log_step "Reticulum config"
 
 mkdir -p "$RNS_CONFIG_DIR" "$INTERFACES_DIR"
+chmod 700 "$RNS_CONFIG_DIR" "$INTERFACES_DIR"
 
 BACKUP_DONE=false
 if [[ -f "$RNS_CONFIG_FILE" ]]; then
@@ -519,6 +521,7 @@ if [[ "$INSTALL_BEACON" == true ]]; then
 # Edit NETWORK and RPC_URL below to match your setup.
 # ─────────────────────────────────────────────────────
 
+umask 077
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 source "\$SCRIPT_DIR/venv/bin/activate"
 
@@ -550,6 +553,7 @@ if [[ "$INSTALL_CLIENT" == true ]]; then
 #   ./run_client.sh <HASH1> --balance <ADDR>  # one-shot balance
 # ─────────────────────────────────────────────────────
 
+umask 077
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 source "\$SCRIPT_DIR/venv/bin/activate"
 
@@ -603,6 +607,7 @@ WorkingDirectory=${SCRIPT_DIR}
 ExecStart=${SCRIPT_DIR}/run_beacon.sh
 Restart=on-failure
 RestartSec=10
+UMask=0077
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=anon0mesh-beacon

@@ -184,6 +184,15 @@ cp reticulum_config ~/.reticulum/config
 # Edit the RNode LoRa port for this machine.
 ```
 
+`setup.sh` restricts `~/.reticulum` and generated launchers use `umask 077`.
+When starting `rnsd` directly, set the same umask before its first run so its
+persisted transport identity is owner-only:
+
+```bash
+umask 077
+rnsd
+```
+
 Public TCP hubs configured by default:
 
 - `rns.beleth.net:4242`

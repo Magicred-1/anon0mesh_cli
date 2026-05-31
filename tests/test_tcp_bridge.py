@@ -57,6 +57,7 @@ def log_warn(msg): log("!", YELLOW, msg)
 
 
 def main():
+    os.umask(0o077)
     procs = []
 
     def cleanup():

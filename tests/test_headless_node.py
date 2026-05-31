@@ -10,6 +10,31 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LAUNCHER = PROJECT_ROOT / "scripts" / "headless-node.sh"
 
 
+def test_launcher_uses_restrictive_umask(tmp_path):
+    fake_python = tmp_path / "python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "mkdir -p \"$ANONMESH_STATE_DIR\"\n"
+        "umask > \"$ANONMESH_STATE_DIR/observed-umask\"\n"
+    )
+    fake_python.chmod(0o755)
+    state_dir = tmp_path / "state"
+    env = {
+        **os.environ,
+        "ANONMESH_PYTHON": str(fake_python),
+        "ANONMESH_STATE_DIR": str(state_dir),
+    }
+
+    result = subprocess.run(
+        [str(LAUNCHER), "preflight"],
+        check=False,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert int((state_dir / "observed-umask").read_text().strip(), 8) == 0o77
+
+
 def test_stop_clears_stale_pid_without_signalling_unrelated_process(tmp_path):
     sleeper = subprocess.Popen(["sleep", "30"])
     try:
