@@ -85,6 +85,17 @@ def test_atomic_private_append_refuses_symlink(tmp_path):
     assert target.read_text() == "old"
 
 
+def test_setup_inline_python_receives_filesystem_paths_through_env():
+    setup = SETUP.read_text()
+
+    assert 'ANONMESH_RNS_CONFIG_FILE="$RNS_CONFIG_FILE" python -c' in setup
+    assert 'open(os.environ["ANONMESH_RNS_CONFIG_FILE"])' in setup
+    assert 'ANONMESH_SCRIPT_DIR="$SCRIPT_DIR" python -c' in setup
+    assert 'sys.path.insert(0, os.environ["ANONMESH_SCRIPT_DIR"])' in setup
+    assert "open('$RNS_CONFIG_FILE')" not in setup
+    assert "sys.path.insert(0, '$SCRIPT_DIR')" not in setup
+
+
 def test_client_launcher_preserves_hex_looking_option_value(tmp_path):
     launcher = _write_client_launcher(tmp_path)
     capture = tmp_path / "args"

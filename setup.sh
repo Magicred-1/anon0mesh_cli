@@ -388,22 +388,22 @@ RNSCFG
 log_ok "Reticulum config written → $RNS_CONFIG_FILE"
 
 # ── Validate config ────────────────────────────────────────────────────────────
-python -c "
-import sys, re
-cfg = open('$RNS_CONFIG_FILE').read()
+ANONMESH_RNS_CONFIG_FILE="$RNS_CONFIG_FILE" python -c '
+import os, sys, re
+cfg = open(os.environ["ANONMESH_RNS_CONFIG_FILE"]).read()
 lines = cfg.splitlines()
-has_reticulum = any(l.strip() == '[reticulum]' for l in lines)
-has_interfaces = any(l.strip() == '[interfaces]' for l in lines)
+has_reticulum = any(l.strip() == "[reticulum]" for l in lines)
+has_interfaces = any(l.strip() == "[interfaces]" for l in lines)
 errors = []
 if not has_reticulum:
-    errors.append('Missing [reticulum] section')
+    errors.append("Missing [reticulum] section")
 if not has_interfaces:
-    errors.append('Missing [interfaces] section')
+    errors.append("Missing [interfaces] section")
 if errors:
-    for e in errors: print('ERROR:', e)
+    for e in errors: print("ERROR:", e)
     sys.exit(1)
-print('Config syntax looks OK')
-" && log_ok "Config validated" || { log_err "Config validation failed — check $RNS_CONFIG_FILE"; exit 1; }
+print("Config syntax looks OK")
+' && log_ok "Config validated" || { log_err "Config validation failed — check $RNS_CONFIG_FILE"; exit 1; }
 
 # ═════════════════════════════════════════════════════════════════════════════
 # STEP 4b — RNode LoRa interface (Heltec V3)
@@ -667,33 +667,33 @@ fi
 # ═════════════════════════════════════════════════════════════════════════════
 log_step "Smoke test"
 
-python -c "
-import sys
-sys.path.insert(0, '$SCRIPT_DIR')
+ANONMESH_SCRIPT_DIR="$SCRIPT_DIR" python -c '
+import os, sys
+sys.path.insert(0, os.environ["ANONMESH_SCRIPT_DIR"])
 errors = []
 
 try:
     import RNS
 except ImportError:
-    errors.append('RNS not importable')
+    errors.append("RNS not importable")
 
 try:
     from shared import APP_NAME, APP_ASPECT, build_rpc, decode_json
-    import json; json.loads(build_rpc('getSlot'))
+    import json; json.loads(build_rpc("getSlot"))
 except Exception as e:
-    errors.append(f'shared: {e}')
+    errors.append(f"shared: {e}")
 
 try:
     import state
-    assert hasattr(state, 'pool')
-    assert hasattr(state, 'active_wallet')
+    assert hasattr(state, "pool")
+    assert hasattr(state, "active_wallet")
 except Exception as e:
-    errors.append(f'state: {e}')
+    errors.append(f"state: {e}")
 
 try:
     from mesh import BeaconPool, BeaconAnnounceHandler, BeaconLink
 except Exception as e:
-    errors.append(f'mesh: {e}')
+    errors.append(f"mesh: {e}")
 
 try:
     import rpc
@@ -702,7 +702,7 @@ try:
     assert callable(rpc.send_transaction)
     assert callable(rpc.get_nonce_account)
 except Exception as e:
-    errors.append(f'rpc: {e}')
+    errors.append(f"rpc: {e}")
 
 try:
     import wallet
@@ -710,21 +710,21 @@ try:
     assert callable(wallet.import_wallet)
     assert callable(wallet.create_nonce_account)
 except Exception as e:
-    errors.append(f'wallet: {e}')
+    errors.append(f"wallet: {e}")
 
 try:
     import menu
     assert callable(menu.repl)
 except Exception as e:
-    errors.append(f'menu: {e}')
+    errors.append(f"menu: {e}")
 
 if errors:
     for e in errors:
-        print('FAIL:', e)
+        print("FAIL:", e)
     sys.exit(1)
 else:
-    print('All modules OK')
-" && log_ok "Smoke test passed" || { log_err "Smoke test failed"; exit 1; }
+    print("All modules OK")
+' && log_ok "Smoke test passed" || { log_err "Smoke test failed"; exit 1; }
 
 # ═════════════════════════════════════════════════════════════════════════════
 # STEP 9 — Solana wallet + durable nonce account (client only, opt-in)
