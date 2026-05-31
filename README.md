@@ -45,12 +45,12 @@ chmod +x setup.sh
 ./setup.sh --beacon          # beacon only
 ./setup.sh --client          # client only (adds solders, qrcode)
 ./setup.sh --both            # both
-./setup.sh --systemd         # also install beacon as a systemd service
-./setup.sh --ble             # install experimental BLE research deps only
-./setup.sh --meshtastic      # install Meshtastic research deps only
-./setup.sh --rnode           # configure detected RNode LoRa hardware
-./setup.sh --wallet-setup    # generate signing keypair + durable nonce account
-./setup.sh --mainnet         # target Solana mainnet-beta instead of devnet
+./setup.sh --beacon --systemd       # also install a beacon systemd service
+./setup.sh --beacon --ble           # install experimental BLE research deps
+./setup.sh --beacon --meshtastic    # install Meshtastic research deps
+./setup.sh --beacon --rnode         # configure detected RNode LoRa hardware
+./setup.sh --client --wallet-setup  # interactively create wallet + nonce state
+./setup.sh --beacon --mainnet       # target Solana mainnet-beta instead of devnet
 ```
 
 For unattended RNode setup, specify the serial device and legal radio region
@@ -214,7 +214,10 @@ RNode LoRa is optional. `setup.sh --ble` installs `bleak` for research only; it 
 
 Transactions sent over the mesh can be delayed by minutes or hours. A [durable nonce account](https://docs.solana.com/developing/programming-model/transactions#durable-transaction-nonces) replaces the expiring blockhash so the signed transaction stays valid until it lands on-chain.
 
-`setup.sh --wallet-setup` generates a signing keypair and creates a nonce account on your behalf (~0.00145 SOL rent-exempt deposit, recoverable).
+`setup.sh --wallet-setup` is intentionally interactive. It generates a signing
+keypair and can create a nonce account on your behalf after confirmation
+(~0.00145 SOL rent-exempt deposit, recoverable). Review the prompts before using
+it with a funded wallet.
 
 The client partially signs the transaction (payer slot); the beacon co-signs (broadcaster slot) before submitting to Solana.
 
@@ -227,3 +230,7 @@ sudo systemctl start anonmesh-beacon
 sudo systemctl status anonmesh-beacon
 journalctl -u anonmesh-beacon -f
 ```
+
+`--systemd` requires `sudo`, writes `/etc/systemd/system/anon0mesh-beacon.service`,
+and enables the service for boot. Run it only when persistent beacon operation is
+intended.

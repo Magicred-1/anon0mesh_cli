@@ -16,7 +16,7 @@
 #    ./setup.sh --beacon     # beacon-only, non-interactive
 #    ./setup.sh --client     # client-only, non-interactive
 #    ./setup.sh --both       # both, non-interactive
-#    ./setup.sh --systemd    # also install beacon as systemd service
+#    ./setup.sh --beacon --systemd  # also install beacon as systemd service
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -90,6 +90,10 @@ for arg in "$@"; do
       echo "Usage: $0 [--beacon] [--client] [--both] [--systemd] [--ble] [--rnode] [--meshtastic] [--mainnet|--devnet] [--wallet-setup]"
       echo "For unattended --rnode setup, set ANONMESH_RNODE_PORT and ANONMESH_RNODE_REGION=us|eu."
       exit 0 ;;
+    *)
+      log_err "Unknown option: $arg"
+      echo "Run $0 --help for usage."
+      exit 1 ;;
   esac
 done
 
