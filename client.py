@@ -155,13 +155,21 @@ def _setup_beacons(args, one_shot: bool) -> None:
 # One-shot command handlers
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _relay_requested() -> bool:
+    try:
+        return input(_RELAY_PROMPT).strip().lower() == "y"
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+
 def _cmd_sign_offline(args) -> None:
     if not (args.from_keypair and args.to and args.lamports):
         log_err("--sign-offline requires --from, --to, --lamports")
         return
     tx_b64 = offline_sign_transfer(
         args.from_keypair, args.to, args.lamports, args.blockhash_value)
-    if tx_b64 and input(_RELAY_PROMPT).strip().lower() == "y":
+    if tx_b64 and _relay_requested():
         send_transaction(tx_b64)
 
 
@@ -181,7 +189,7 @@ def _cmd_sign_nonce_tx(args) -> None:
         args.from_keypair, args.nonce_account, auth_path,
         args.to, args.lamports, args.nonce_value,
     )
-    if tx_b64 and input(_RELAY_PROMPT).strip().lower() == "y":
+    if tx_b64 and _relay_requested():
         send_transaction(tx_b64)
 
 
