@@ -148,10 +148,11 @@ def generate_wallet(save_path: str | None = None) -> str | None:
 
     state.active_wallet = {"pubkey": pubkey, "path": path}
 
+    safe_path = terminal_safe_text(path)
     print(f"\n  {GREEN}{BOLD}New wallet generated{RESET}")
     print(f"  Public key:  {BOLD}{pubkey}{RESET}")
-    print(f"  Saved to:    {path}")
-    print(f"\n  {YELLOW}{BOLD}IMPORTANT:{RESET} Back up {path!r} — it contains your private key.")
+    print(f"  Saved to:    {safe_path}")
+    print(f"\n  {YELLOW}{BOLD}IMPORTANT:{RESET} Back up {safe_path!r} — it contains your private key.")
     print(f"  {DIM}Anyone with this file can spend funds from this wallet.{RESET}\n")
     return path
 
@@ -213,10 +214,11 @@ def import_wallet(raw: str, save_path: str) -> str | None:
     pubkey = str(kp.pubkey())
     state.active_wallet = {"pubkey": pubkey, "path": save_path}
 
+    safe_path = terminal_safe_text(save_path)
     print(f"\n  {GREEN}{BOLD}Wallet imported{RESET}")
     print(f"  Public key:  {BOLD}{pubkey}{RESET}")
-    print(f"  Saved to:    {save_path}")
-    print(f"\n  {YELLOW}{BOLD}IMPORTANT:{RESET} Back up {save_path!r} — it contains your private key.\n")
+    print(f"  Saved to:    {safe_path}")
+    print(f"\n  {YELLOW}{BOLD}IMPORTANT:{RESET} Back up {safe_path!r} — it contains your private key.\n")
     return pubkey
 
 

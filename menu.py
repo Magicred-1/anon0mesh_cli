@@ -296,7 +296,8 @@ def _select_nonce_account() -> str | None:
         bal_str = (f"  {GREEN}{bal:.9f} SOL{RESET}" if bal is not None
                    else f"  {DIM}balance unknown{RESET}")
         labels.append(
-            f"{n['pubkey'][:8]}…{n['pubkey'][-4:]}  {DIM}{n['path']}{RESET}{bal_str}"
+            f"{n['pubkey'][:8]}…{n['pubkey'][-4:]}  "
+            f"{DIM}{terminal_safe_text(n['path'])}{RESET}{bal_str}"
         )
 
     idx = _pick("Select nonce account", labels)
@@ -579,7 +580,7 @@ def _render_header() -> None:
     if state.active_wallet:
         pk    = state.active_wallet["pubkey"]
         short = f"{pk[:8]}…{pk[-8:]}"
-        path  = state.active_wallet["path"]
+        path  = terminal_safe_text(state.active_wallet["path"])
         print(f"  {GREEN}◆{RESET}  {BOLD}{short}{RESET}  {DIM}{path}{RESET}")
 
     print(bar)

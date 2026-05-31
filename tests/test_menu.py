@@ -87,3 +87,38 @@ def test_broadcast_with_retry_rejects_malformed_signature(monkeypatch, capsys):
     monkeypatch.setattr(menu, "rpc_call", lambda *_: {"result": {"unexpected": "object"}})
     menu._broadcast_with_retry("transaction")
     assert "All broadcast attempts failed" in capsys.readouterr().out
+
+
+def test_select_nonce_account_escapes_terminal_control_bytes_in_path(monkeypatch):
+    labels = []
+    pubkey = "a" * 44
+    monkeypatch.setattr(menu, "scan_nonce_accounts", lambda: [
+        {"pubkey": pubkey, "path": "before\x1b[2Jafter"},
+    ])
+    monkeypatch.setattr(menu, "_fetch_balance_sol", lambda *_: 1.0)
+    monkeypatch.setattr(menu, "_pick", lambda _prompt, options: labels.extend(options) or 0)
+
+    assert menu._select_nonce_account() == pubkey
+    assert r"before\x1b[2Jafter" in labels[0]
+    assert "\x1b[2J" not in labels[0]
+
+
+def test_render_header_escapes_terminal_control_bytes_in_wallet_path(monkeypatch, capsys):
+    class Pool:
+        strategy = "race"
+
+        def active_links(self):
+            return []
+
+        def pending_count(self):
+            return 0
+
+    menu.state.pool = Pool()
+    menu.state.active_wallet = {"pubkey": "a" * 44, "path": "before\x1b[2Jafter"}
+    monkeypatch.setattr(menu, "_wallet_qr_lines", lambda _pubkey: [])
+
+    menu._render_header()
+
+    output = capsys.readouterr().out
+    assert r"before\x1b[2Jafter" in output
+    assert "\x1b[2J" not in output

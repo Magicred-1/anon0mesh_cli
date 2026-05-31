@@ -120,6 +120,16 @@ def test_generate_wallet_refuses_symlink_target(tmp_path, capsys):
     assert "Failed to save" in capsys.readouterr().out
 
 
+def test_generate_wallet_escapes_terminal_control_bytes_in_path(tmp_path, capsys):
+    path = str(tmp_path / "before\x1b[2Jafter.json")
+
+    assert wallet.generate_wallet(path) == path
+
+    output = capsys.readouterr().out
+    assert r"before\x1b[2Jafter.json" in output
+    assert "\x1b[2J" not in output
+
+
 # ── import_wallet ─────────────────────────────────────────────────────────────
 
 def test_import_wallet_hex64(tmp_path):
