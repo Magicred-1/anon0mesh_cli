@@ -1,6 +1,7 @@
 """Regression tests for the nonce bootstrap embedded in setup.sh."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -16,8 +17,18 @@ def _nonce_bootstrap() -> str:
     return nonce_setup.split("python << 'PYEOF'\n", 1)[1].split("\nPYEOF", 1)[0]
 
 
+def _wallet_bootstrap() -> str:
+    setup = SETUP.read_text()
+    marker = '        if ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" python << \'PYEOF\'\n'
+    return setup.split(marker, 1)[1].split("\nPYEOF", 1)[0]
+
+
 def test_nonce_bootstrap_compiles():
     compile(_nonce_bootstrap(), "<setup nonce bootstrap>", "exec")
+
+
+def test_wallet_bootstrap_compiles():
+    compile(_wallet_bootstrap(), "<setup wallet bootstrap>", "exec")
 
 
 class _Response:
@@ -73,6 +84,37 @@ def test_nonce_bootstrap_rpc_rejects_oversized_response_and_closes(monkeypatch, 
     with pytest.raises(RuntimeError, match="response exceeds size limit"):
         rpc("getHealth", [])
     assert response.closed is True
+
+
+def test_wallet_bootstrap_replaces_hardlink_without_modifying_sibling(tmp_path, monkeypatch):
+    sibling = tmp_path / "keep.txt"
+    sibling.write_text("keep")
+    path = tmp_path / "wallet.json"
+    os.link(sibling, path)
+    monkeypatch.setenv("ANON0MESH_KP_PATH", str(path))
+
+    exec(_wallet_bootstrap(), {})
+
+    assert sibling.read_text() == "keep"
+    assert path.read_text() != "keep"
+    assert path.stat().st_ino != sibling.stat().st_ino
+
+
+def test_nonce_bootstrap_save_replaces_hardlink_without_modifying_sibling(tmp_path, monkeypatch):
+    sibling = tmp_path / "keep.txt"
+    sibling.write_text("keep")
+    path = tmp_path / "nonce.json"
+    os.link(sibling, path)
+    monkeypatch.setenv("ANON0MESH_RPC", "https://example.invalid")
+    monkeypatch.setenv("ANON0MESH_DIR", str(tmp_path))
+    namespace = {}
+    exec(_nonce_bootstrap().split("\nnonce_path = None", 1)[0], namespace)
+
+    namespace["save_keypair"](str(path), namespace["Keypair"]())
+
+    assert sibling.read_text() == "keep"
+    assert path.read_text() != "keep"
+    assert path.stat().st_ino != sibling.stat().st_ino
 
 
 def test_nonce_bootstrap_preserves_keypair_after_uncertain_submission():

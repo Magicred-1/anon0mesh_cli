@@ -723,18 +723,44 @@ if [[ "$INSTALL_CLIENT" == true && "$SETUP_WALLET" == true ]]; then
         WALLET_KEYPAIR_PATH="$SCRIPT_DIR/wallet.json"
         # Generate keypair via Python; pass path through env to avoid heredoc quoting issues
         if ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" python << 'PYEOF'
-import os, json, stat
+import os, json, stat, tempfile
 from solders.keypair import Keypair
+
+def save_keypair(path, kp):
+    try:
+        destination_mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        pass
+    else:
+        if stat.S_ISLNK(destination_mode):
+            raise OSError(f"Refusing symlinked keypair path: {path}")
+        if not stat.S_ISREG(destination_mode):
+            raise OSError(f"Refusing non-regular keypair path: {path}")
+    directory = os.path.dirname(path) or "."
+    previous_umask = os.umask(0o077)
+    temp_path = ""
+    fd = -1
+    try:
+        fd, temp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", dir=directory)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            fd = -1
+            json.dump(list(bytes(kp)), f)
+        os.replace(temp_path, path)
+        temp_path = ""
+    finally:
+        if fd != -1:
+            os.close(fd)
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+        os.umask(previous_umask)
+
 kp   = Keypair()
 path = os.environ["ANON0MESH_KP_PATH"]
-flags = (os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-fd = os.open(path, flags, 0o600)
-with os.fdopen(fd, "w") as f:
-    if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-        raise OSError(f"Refusing non-regular keypair path: {path}")
-    os.fchmod(f.fileno(), 0o600)
-    json.dump(list(bytes(kp)), f)
+save_keypair(path, kp)
 print(f"  Public key : {kp.pubkey()}")
 print(f"  Saved to   : {path}")
 PYEOF
@@ -811,7 +837,7 @@ PYEOF
           ANON0MESH_RPC="$_SETUP_RPC" \
           ANON0MESH_DIR="$SCRIPT_DIR" \
           python << 'PYEOF'
-import os, sys, json, base64, stat
+import os, sys, json, base64, stat, tempfile
 import requests
 from solders.keypair     import Keypair
 from solders.pubkey      import Pubkey
@@ -885,6 +911,38 @@ def load_keypair(path):
         os.fchmod(f.fileno(), 0o600)
         return Keypair.from_bytes(bytes(json.load(f)))
 
+def save_keypair(path, kp):
+    try:
+        destination_mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        pass
+    else:
+        if stat.S_ISLNK(destination_mode):
+            raise OSError(f"Refusing symlinked keypair path: {path}")
+        if not stat.S_ISREG(destination_mode):
+            raise OSError(f"Refusing non-regular keypair path: {path}")
+    directory = os.path.dirname(path) or "."
+    previous_umask = os.umask(0o077)
+    temp_path = ""
+    fd = -1
+    try:
+        fd, temp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", dir=directory)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            fd = -1
+            json.dump(list(bytes(kp)), f)
+        os.replace(temp_path, path)
+        temp_path = ""
+    finally:
+        if fd != -1:
+            os.close(fd)
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+        os.umask(previous_umask)
+
 nonce_path = None
 submitted = False
 
@@ -893,14 +951,7 @@ try:
 
     nonce_kp   = Keypair()
     nonce_path = os.path.join(SAVE_DIR, f"nonce_{str(nonce_kp.pubkey())[:8]}.json")
-    flags = (os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-             | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-    fd = os.open(nonce_path, flags, 0o600)
-    with os.fdopen(fd, "w") as f:
-        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-            raise OSError(f"Refusing non-regular keypair path: {nonce_path}")
-        os.fchmod(f.fileno(), 0o600)
-        json.dump(list(bytes(nonce_kp)), f)
+    save_keypair(nonce_path, nonce_kp)
 
     payer_pub = payer.pubkey()
     nonce_pub = nonce_kp.pubkey()
