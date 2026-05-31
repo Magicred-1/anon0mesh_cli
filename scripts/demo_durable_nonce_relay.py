@@ -27,7 +27,6 @@ from __future__ import annotations
 import sys
 import os
 import time
-import json
 import base64
 import argparse
 import tempfile
@@ -63,9 +62,11 @@ from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     build_rpc, decode_json, decompress_response, compress_response,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
+    positive_int, rpc_error_message, terminal_safe_text,
     BOLD, CYAN, GREEN, YELLOW, RED, DIM, RESET,
 )
 from mesh import BeaconPool, BeaconAnnounceHandler, start_reticulum
+from wallet import _load_private_keypair, _save_private_keypair
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 NONCE_ACCOUNT_LENGTH = 80
@@ -73,6 +74,7 @@ AIRDROP_LAMPORTS     = 2_000_000_000   # 2 SOL
 TRANSFER_LAMPORTS    = 100_000         # 0.0001 SOL default
 CONFIRM_TIMEOUT      = 60             # seconds to wait for tx confirmation
 CONFIRM_POLL         = 2              # seconds between confirmation polls
+_MAX_U64             = (1 << 64) - 1
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -117,17 +119,43 @@ def mesh_rpc(method: str, params=None) -> dict | None:
     resp = state.pool.call(method, params)
     if resp is None:
         log_err(f"No response from beacon for {method}")
+    elif not isinstance(resp, dict):
+        log_err(f"Unexpected {method} response: expected an object")
+        return None
     return resp
 
 
-def extract_result(resp: dict):
+def extract_result(resp: dict | None):
     """Unwrap Solana's {context, value} wrapper if present."""
-    if resp is None:
+    if not isinstance(resp, dict):
         return None
     r = resp.get("result")
     if isinstance(r, dict) and "value" in r:
         return r["value"]
     return r
+
+
+def _is_nonempty_string(value) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _is_u64(value) -> bool:
+    return not isinstance(value, bool) and isinstance(value, int) and 0 <= value <= _MAX_U64
+
+
+def _positive_u64(raw_value: str) -> int:
+    value = positive_int(raw_value)
+    if value > _MAX_U64:
+        raise ValueError(f"expected an integer no greater than {_MAX_U64}")
+    return value
+
+
+def _extract_balance(resp: dict | None) -> int:
+    balance = extract_result(resp)
+    if not _is_u64(balance):
+        log_warn(f"Unexpected getBalance response: {resp}")
+        return 0
+    return balance
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -138,14 +166,25 @@ def step_generate_keypair(tmpdir: str) -> tuple[Keypair, str]:
     """Generate an ephemeral keypair for the demo."""
     kp = Keypair()
     path = os.path.join(tmpdir, "demo_wallet.json")
-    with open(path, "w") as f:
-        json.dump(list(bytes(kp)), f)
+    _save_private_keypair(path, kp)
     log_ok(f"Ephemeral keypair: {kp.pubkey()}")
     return kp, path
 
 
+def step_load_keypair(path: str) -> Keypair | None:
+    """Load a supplied demo payer keypair with a controlled error path."""
+    try:
+        return _load_private_keypair(path)
+    except Exception as exc:
+        log_err(f"Could not load keypair: {exc}")
+        return None
+
+
 def step_airdrop(address: str, lamports: int, timer: Timer) -> str | None:
     """Request devnet airdrop and wait for confirmation."""
+    if not _is_u64(lamports) or lamports == 0:
+        log_err("Airdrop lamports must be a positive u64 integer")
+        return None
     log_info(f"Requesting airdrop of {lamports / 1e9:.1f} SOL to {address}...")
     t0 = time.monotonic()
 
@@ -153,12 +192,12 @@ def step_airdrop(address: str, lamports: int, timer: Timer) -> str | None:
     if resp is None:
         return None
     if "error" in resp:
-        log_err(f"Airdrop failed: {resp['error']}")
+        log_err(f"Airdrop failed: {rpc_error_message(resp['error'])}")
         return None
 
     sig = extract_result(resp)
-    if not sig:
-        log_err(f"Airdrop returned no signature: {resp}")
+    if not _is_nonempty_string(sig):
+        log_err(f"Airdrop returned an invalid signature: {resp}")
         return None
 
     log_ok(f"Airdrop requested: {sig}")
@@ -180,8 +219,7 @@ def step_create_nonce(payer: Keypair, tmpdir: str, timer: Timer) -> tuple[Keypai
 
     nonce_kp = Keypair()
     nonce_path = os.path.join(tmpdir, "demo_nonce.json")
-    with open(nonce_path, "w") as f:
-        json.dump(list(bytes(nonce_kp)), f)
+    _save_private_keypair(nonce_path, nonce_kp)
 
     payer_pubkey = payer.pubkey()
     nonce_pubkey = nonce_kp.pubkey()
@@ -192,6 +230,9 @@ def step_create_nonce(payer: Keypair, tmpdir: str, timer: Timer) -> tuple[Keypai
         log_err(f"Failed to get rent exemption: {resp}")
         return None, None
     rent_lamports = extract_result(resp)
+    if not _is_u64(rent_lamports):
+        log_err(f"Unexpected rent exemption response: {resp}")
+        return None, None
     log_info(f"Rent-exempt: {rent_lamports:,} lamports")
 
     # Get recent blockhash for the create tx
@@ -204,8 +245,8 @@ def step_create_nonce(payer: Keypair, tmpdir: str, timer: Timer) -> tuple[Keypai
         blockhash = bh_val.get("blockhash")
     else:
         blockhash = bh_val
-    if not blockhash:
-        log_err(f"No blockhash in response: {resp}")
+    if not _is_nonempty_string(blockhash):
+        log_err(f"Invalid blockhash in response: {resp}")
         return None, None
 
     # Build create + init nonce tx
@@ -221,7 +262,11 @@ def step_create_nonce(payer: Keypair, tmpdir: str, timer: Timer) -> tuple[Keypai
         authority=payer_pubkey,
     ))
 
-    bh = Hash.from_string(blockhash)
+    try:
+        bh = Hash.from_string(blockhash)
+    except ValueError as exc:
+        log_err(f"Invalid blockhash: {exc}")
+        return None, None
     msg = Message.new_with_blockhash([create_ix, init_ix], payer_pubkey, bh)
     tx = Transaction.new_unsigned(msg)
     tx.sign([payer, nonce_kp], bh)
@@ -231,11 +276,14 @@ def step_create_nonce(payer: Keypair, tmpdir: str, timer: Timer) -> tuple[Keypai
 
     resp = mesh_rpc("sendTransaction", [tx_b64, {"encoding": "base64", "preflightCommitment": "confirmed"}])
     if resp is None or "error" in resp:
-        err = resp.get("error", "no response") if resp else "no response"
+        err = rpc_error_message(resp.get("error")) if resp else "no response"
         log_err(f"Nonce create tx rejected: {err}")
         return None, None
 
-    sig = resp.get("result", "?")
+    sig = resp.get("result")
+    if not _is_nonempty_string(sig):
+        log_err(f"Nonce create tx returned an invalid signature: {resp}")
+        return None, None
     log_ok(f"Nonce create tx sent: {sig}")
 
     confirmed = wait_for_confirmation(sig, "nonce create")
@@ -268,12 +316,24 @@ def step_fetch_nonce(nonce_pubkey_str: str, timer: Timer) -> str | None:
 
     try:
         parsed = account["data"]["parsed"]
+        if not isinstance(parsed, dict):
+            raise TypeError("parsed nonce data must be an object")
         if parsed.get("type") != "initialized":
             log_err(f"Nonce not initialized: type={parsed.get('type')}")
             return None
-        nonce_value = parsed["info"]["blockhash"]
+        info = parsed["info"]
+        if not isinstance(info, dict):
+            raise TypeError("nonce info must be an object")
+        nonce_value = info["blockhash"]
+        if not _is_nonempty_string(nonce_value):
+            raise TypeError("nonce blockhash must be a non-empty string")
     except (KeyError, TypeError) as exc:
         log_err(f"Could not parse nonce account: {exc}")
+        return None
+    try:
+        Hash.from_string(nonce_value)
+    except ValueError as exc:
+        log_err(f"Invalid nonce blockhash: {exc}")
         return None
 
     ms = timer.mark("Fetch nonce value", t0)
@@ -290,13 +350,23 @@ def step_sign_nonce_transfer(
     timer: Timer,
 ) -> str | None:
     """Build and sign an offline SOL transfer using the durable nonce."""
+    if not _is_u64(lamports) or lamports == 0:
+        log_err("Transfer lamports must be a positive u64 integer")
+        return None
+    if not all(_is_nonempty_string(value) for value in (to_address, nonce_pubkey_str, nonce_value)):
+        log_err("Transfer addresses and nonce value must be non-empty strings")
+        return None
     log_info(f"Signing offline transfer: {lamports:,} lamports → {to_address[:16]}...")
     t0 = time.monotonic()
 
-    payer_pubkey = payer.pubkey()
-    nonce_pubkey = Pubkey.from_string(nonce_pubkey_str)
-    to_pubkey = Pubkey.from_string(to_address)
-    nonce_hash = Hash.from_string(nonce_value)
+    try:
+        payer_pubkey = payer.pubkey()
+        nonce_pubkey = Pubkey.from_string(nonce_pubkey_str)
+        to_pubkey = Pubkey.from_string(to_address)
+        nonce_hash = Hash.from_string(nonce_value)
+    except ValueError as exc:
+        log_err(f"Invalid transfer argument: {exc}")
+        return None
 
     advance_ix = advance_nonce_account(AdvanceNonceAccountParams(
         nonce_pubkey=nonce_pubkey,
@@ -315,7 +385,7 @@ def step_sign_nonce_transfer(
     tx_b64 = base64.b64encode(bytes(tx)).decode("utf-8")
     ms = timer.mark("Sign offline tx (durable nonce)", t0)
     log_ok(f"Signed offline: {len(tx_b64)} chars  ({ms:.0f}ms)")
-    log_info(f"{DIM}This tx never expires — relay it whenever ready{RESET}")
+    log_info("This tx never expires — relay it whenever ready")
     return tx_b64
 
 
@@ -328,13 +398,13 @@ def step_relay_tx(tx_b64: str, timer: Timer) -> str | None:
     if resp is None:
         return None
     if "error" in resp:
-        err = resp["error"]
-        if isinstance(err, dict):
-            err = err.get("message", err)
-        log_err(f"Transaction rejected: {err}")
+        log_err(f"Transaction rejected: {rpc_error_message(resp['error'])}")
         return None
 
-    sig = resp.get("result", "?")
+    sig = resp.get("result")
+    if not _is_nonempty_string(sig):
+        log_err(f"Transaction returned an invalid signature: {resp}")
+        return None
     ms = timer.mark("Relay tx via mesh", t0)
     log_ok(f"Relayed in {ms:.0f}ms: {sig}")
     return sig
@@ -360,22 +430,35 @@ def step_confirm_tx(sig: str, timer: Timer) -> bool:
 
 def wait_for_confirmation(sig: str, label: str, timeout: float = CONFIRM_TIMEOUT) -> bool:
     """Poll getSignatureStatuses until confirmed or timeout."""
+    if not _is_nonempty_string(sig):
+        log_err(f"Cannot confirm {label}: invalid signature")
+        return False
     deadline = time.time() + timeout
     while time.time() < deadline:
         time.sleep(CONFIRM_POLL)
         resp = mesh_rpc("getSignatureStatuses", [[sig]])
         if resp is None:
             continue
+        if "error" in resp:
+            log_warn(f"Could not fetch {label} status: {rpc_error_message(resp['error'])}")
+            continue
         statuses = extract_result(resp)
-        if statuses and isinstance(statuses, list) and statuses[0]:
-            status = statuses[0]
-            conf = status.get("confirmationStatus", "")
-            if conf in ("confirmed", "finalized"):
-                return True
-            err = status.get("err")
-            if err is not None:
-                log_err(f"{label} tx failed on-chain: {err}")
-                return False
+        if not isinstance(statuses, list):
+            log_warn(f"Unexpected getSignatureStatuses response: {resp}")
+            continue
+        if not statuses or statuses[0] is None:
+            continue
+        status = statuses[0]
+        if not isinstance(status, dict):
+            log_warn(f"Unexpected getSignatureStatuses entry: {status}")
+            continue
+        conf = status.get("confirmationStatus", "")
+        if conf in ("confirmed", "finalized"):
+            return True
+        err = status.get("err")
+        if err is not None:
+            log_err(f"{label} tx failed on-chain: {err}")
+            return False
     return False
 
 
@@ -429,13 +512,13 @@ def main():
                         help="Auto-discover beacons via mesh announces")
     parser.add_argument("--config", "-c", default=None,
                         help="Reticulum config dir")
-    parser.add_argument("--timeout", "-t", default=30, type=int,
+    parser.add_argument("--timeout", "-t", default=30, type=positive_int,
                         help="RPC request timeout in seconds")
     parser.add_argument("--recipient", "-r", default=None, metavar="ADDRESS",
                         help="SOL recipient address (default: send to self)")
-    parser.add_argument("--lamports", "-l", default=TRANSFER_LAMPORTS, type=int,
+    parser.add_argument("--lamports", "-l", default=TRANSFER_LAMPORTS, type=_positive_u64,
                         help=f"Lamports to transfer (default: {TRANSFER_LAMPORTS:,})")
-    parser.add_argument("--airdrop", default=AIRDROP_LAMPORTS, type=int,
+    parser.add_argument("--airdrop", default=AIRDROP_LAMPORTS, type=_positive_u64,
                         help=f"Airdrop amount in lamports (default: {AIRDROP_LAMPORTS:,})")
     parser.add_argument("--keypair", "-k", default=None, metavar="PATH",
                         help="Path to pre-funded keypair JSON (skip airdrop)")
@@ -464,9 +547,9 @@ def main():
         print(f"\n  {BOLD}{CYAN}━━━ Step 1: Generate Keypair ━━━{RESET}")
         t0 = time.monotonic()
         if args.keypair:
-            with open(args.keypair, "r") as f:
-                kp_bytes = bytes(json.load(f))
-            payer = Keypair.from_bytes(kp_bytes)
+            payer = step_load_keypair(args.keypair)
+            if payer is None:
+                sys.exit(1)
             wallet_path = args.keypair
             log_ok(f"Loaded keypair: {payer.pubkey()}")
         else:
@@ -484,8 +567,8 @@ def main():
         bal = 0
         resp = mesh_rpc("getBalance", [payer_addr, {"commitment": "confirmed"}])
         if resp and "result" in resp:
-            bal = extract_result(resp)
-            if isinstance(bal, int) and bal > 0:
+            bal = _extract_balance(resp)
+            if bal > 0:
                 log_ok(f"Existing balance: {bal / 1e9:.9f} SOL — skipping airdrop")
 
         if not bal:
@@ -497,8 +580,8 @@ def main():
             for attempt in range(15):
                 resp = mesh_rpc("getBalance", [payer_addr, {"commitment": "confirmed"}])
                 if resp and "result" in resp:
-                    bal = extract_result(resp)
-                    if isinstance(bal, int) and bal > 0:
+                    bal = _extract_balance(resp)
+                    if bal > 0:
                         log_ok(f"Balance: {bal / 1e9:.9f} SOL")
                         break
                 if attempt < 14:
@@ -557,8 +640,9 @@ def main():
         print(f"  Recipient: {BOLD}{recipient}{RESET}")
         print(f"  Nonce:     {BOLD}{nonce_pubkey_str}{RESET}")
         print(f"  Amount:    {BOLD}{args.lamports:,} lamports{RESET}")
-        print(f"  Signature: {BOLD}{GREEN}{relay_sig}{RESET}")
-        print(f"  Explorer:  {DIM}https://explorer.solana.com/tx/{relay_sig}?cluster=devnet{RESET}")
+        safe_sig = terminal_safe_text(relay_sig)
+        print(f"  Signature: {BOLD}{GREEN}{safe_sig}{RESET}")
+        print(f"  Explorer:  {DIM}https://explorer.solana.com/tx/{safe_sig}?cluster=devnet{RESET}")
         print()
 
     state.pool.teardown_all()

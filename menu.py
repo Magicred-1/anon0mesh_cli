@@ -12,16 +12,17 @@ import os
 import sys
 import json
 import threading
+from decimal import Decimal, InvalidOperation
 
 import state
 from shared import (
-    log_info, log_ok, log_warn, log_err,
+    is_u64, log_info, log_ok, log_warn, log_err, rpc_error_message, terminal_safe_text,
     BOLD, CYAN, GREEN, YELLOW, RED, RESET, DIM,
     set_quiet,
 )
 from rpc import (
     rpc_call,
-    get_balance, confidential_get_balance,
+    get_balance,
     get_slot, get_block_height, get_transaction_count, get_recent_blockhash,
     get_token_accounts, send_transaction, simulate_transaction,
     get_nonce_account, get_beacon_pubkey, cosign_and_send,
@@ -41,6 +42,10 @@ _PROMPT_AMOUNT     = "Amount  (SOL, e.g. 0.5)"
 _PROMPT_NONCE_ACCT = "Nonce account pubkey"
 _INVALID_AMOUNT    = "Invalid amount"
 _NO_WALLET         = "No wallet loaded — use WALLET › Generate or Import first"
+_MAX_U32           = (1 << 32) - 1
+_MAX_U64           = (1 << 64) - 1
+_MAX_AMOUNT_TEXT_LENGTH = 512
+_MAX_NONCE_BALANCE_WORKERS = 8
 
 _W              = 56       # visible width of section fill
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -50,6 +55,61 @@ _spinner_idx    = 0
 # ═══════════════════════════════════════════════════════════════════════════════
 # Input helpers
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _parse_positive_units(raw: str, scale: int) -> int | None:
+    try:
+        if (
+            len(raw) > _MAX_AMOUNT_TEXT_LENGTH
+            or isinstance(scale, bool)
+            or not isinstance(scale, int)
+            or scale <= 0
+        ):
+            raise ValueError
+        value = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        log_warn(_INVALID_AMOUNT)
+        return None
+    if not value.is_finite():
+        log_warn(_INVALID_AMOUNT)
+        return None
+    if value <= 0:
+        log_warn("Amount must be greater than 0")
+        return None
+
+    _, digits, exponent = value.as_tuple()
+    coefficient = int("".join(str(digit) for digit in digits))
+    scaled_coefficient = coefficient * scale
+    if exponent >= 0:
+        if exponent > 19 or scaled_coefficient > _MAX_U64 // (10 ** exponent):
+            log_warn("Amount exceeds maximum supported units")
+            return None
+        units = scaled_coefficient * (10 ** exponent)
+    else:
+        decimal_places = -exponent
+        if decimal_places > len(str(scaled_coefficient)):
+            log_warn("Amount has more decimal places than supported")
+            return None
+        units, remainder = divmod(scaled_coefficient, 10 ** decimal_places)
+        if remainder:
+            log_warn("Amount has more decimal places than supported")
+            return None
+
+    if units > _MAX_U64:
+        log_warn("Amount exceeds maximum supported units")
+        return None
+    return units
+
+
+def _bounded_env_int(name: str, default: str, maximum: int) -> int | None:
+    try:
+        value = int(os.getenv(name, default))
+    except ValueError:
+        value = -1
+    if not 0 <= value <= maximum:
+        log_warn(f"Invalid {name}: expected an integer between 0 and {maximum}")
+        return None
+    return value
+
 
 def _ask(prompt: str) -> str:
     try:
@@ -188,14 +248,6 @@ def _do_balance():
         get_balance(addr)
 
 
-def _do_cbalance():
-    addr = _ask("Wallet address (blank = active wallet)")
-    if not addr and state.active_wallet:
-        addr = state.active_wallet["pubkey"]
-    if addr:
-        confidential_get_balance(addr)
-
-
 def _do_tokens():
     addr = _ask("Owner address (blank = active wallet)")
     if not addr and state.active_wallet:
@@ -218,7 +270,9 @@ def _fetch_balance_sol(pubkey: str) -> float | None:
         return None
     lamps = resp["result"]
     if isinstance(lamps, dict):
-        lamps = lamps.get("value", 0)
+        lamps = lamps.get("value")
+    if not is_u64(lamps):
+        return None
     return lamps / 1_000_000_000
 
 
@@ -231,7 +285,9 @@ def _select_nonce_account() -> str | None:
         return _ask(_PROMPT_NONCE_ACCT) or None
 
     with _Spinner("Fetching balances…") as sp:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(found)) as ex:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(len(found), _MAX_NONCE_BALANCE_WORKERS),
+        ) as ex:
             futs = {ex.submit(_fetch_balance_sol, n["pubkey"]): n["pubkey"] for n in found}
             bals = {pk: fut.result() for fut, pk in
                     ((f, futs[f]) for f in concurrent.futures.as_completed(futs))}
@@ -243,7 +299,8 @@ def _select_nonce_account() -> str | None:
         bal_str = (f"  {GREEN}{bal:.9f} SOL{RESET}" if bal is not None
                    else f"  {DIM}balance unknown{RESET}")
         labels.append(
-            f"{n['pubkey'][:8]}…{n['pubkey'][-4:]}  {DIM}{n['path']}{RESET}{bal_str}"
+            f"{n['pubkey'][:8]}…{n['pubkey'][-4:]}  "
+            f"{DIM}{terminal_safe_text(n['path'])}{RESET}{bal_str}"
         )
 
     idx = _pick("Select nonce account", labels)
@@ -272,12 +329,8 @@ def _do_send_sol():
     if not to: return
     raw = _ask(_PROMPT_AMOUNT)
     if not raw: return
-    try:
-        lamports = int(float(raw) * 1_000_000_000)
-    except ValueError:
-        log_warn(_INVALID_AMOUNT); return
-    if lamports <= 0:
-        log_warn("Amount must be greater than 0"); return
+    lamports = _parse_positive_units(raw, 1_000_000_000)
+    if lamports is None: return
 
     tx_b64 = offline_sign_nonce_transfer(
         kp_path, nonce_pubkey, kp_path, to, lamports, nonce_info["nonce"]
@@ -292,11 +345,14 @@ def _broadcast_with_retry(tx_b64: str) -> None:
             if attempt > 1:
                 sp.tick(f"Retry {attempt}/{_MAX_RETRIES}…")
             resp = rpc_call("sendTransaction", [tx_b64, {"encoding": "base64"}])
-            if resp and "result" in resp:
-                sp.done(f"Confirmed  sig: {resp['result'][:20]}…")
-                print(f"\n  {GREEN}{BOLD}Signature:{RESET} {resp['result']}\n")
+            signature = resp.get("result") if isinstance(resp, dict) else None
+            if isinstance(signature, str) and signature:
+                safe_signature = terminal_safe_text(signature)
+                sp.done(f"Confirmed  sig: {safe_signature[:20]}…")
+                print(f"\n  {GREEN}{BOLD}Signature:{RESET} {safe_signature}\n")
                 return
-            err = resp.get("error", {}).get("message", "no response") if resp else "no response"
+            error = resp.get("error") if isinstance(resp, dict) else None
+            err = rpc_error_message(error, default="no response")
             sp.tick(f"Attempt {attempt} failed: {err[:50]}")
         sp.done("All broadcast attempts failed", ok=False)
 
@@ -325,14 +381,11 @@ def _do_arcium_transfer():
     if not mint: return
     raw = _ask("Amount  (token units, e.g. 1.5)")
     if not raw: return
-    try:
-        _WSOL = "So11111111111111111111111111111111111111112"
-        decimals = 9 if mint == _WSOL else int(os.getenv("ARCIUM_TOKEN_DECIMALS", "6"))
-        amount = int(float(raw) * (10 ** decimals))
-    except ValueError:
-        log_warn(_INVALID_AMOUNT); return
-    if amount <= 0:
-        log_warn("Amount must be greater than 0"); return
+    _WSOL = "So11111111111111111111111111111111111111112"
+    decimals = 9 if mint == _WSOL else _bounded_env_int("ARCIUM_TOKEN_DECIMALS", "6", 255)
+    if decimals is None: return
+    amount = _parse_positive_units(raw, 10 ** decimals)
+    if amount is None: return
 
     log_info("Fetching beacon co-signing pubkey…")
     beacon_pk = get_beacon_pubkey()
@@ -341,7 +394,8 @@ def _do_arcium_transfer():
         return
     log_ok(f"Beacon (broadcaster): {beacon_pk}")
 
-    cluster_offset         = int(os.getenv("ARCIUM_CLUSTER_OFFSET", "456"))
+    cluster_offset         = _bounded_env_int("ARCIUM_CLUSTER_OFFSET", "456", _MAX_U32)
+    if cluster_offset is None: return
     broadcaster_ta         = os.getenv("ARCIUM_BROADCASTER_TOKEN_ACCOUNT", "").strip() or None
 
     partial_tx = partial_sign_execute_payment(
@@ -384,10 +438,8 @@ def _do_sign_nonce():
     if not to: return
     raw   = _ask(_PROMPT_AMOUNT)
     if not raw: return
-    try:
-        lamps = int(float(raw) * 1_000_000_000)
-    except ValueError:
-        log_warn(_INVALID_AMOUNT); return
+    lamps = _parse_positive_units(raw, 1_000_000_000)
+    if lamps is None: return
     nval   = _ask("Nonce value  (blank = fetch from chain)")
     tx_b64 = offline_sign_nonce_transfer(kp, nonce, auth or kp, to, lamps, nval or None)
     if tx_b64 and _ask(_RELAY_PROMPT).lower() == "y":
@@ -469,7 +521,6 @@ MENU: list[dict] = [
     {"section": _SEC_WALLET,  "label": "Import private key",                   "fn": _do_import_wallet},
     {"section": _SEC_WALLET,  "label": "Copy public key",                      "fn": _do_copy_pubkey},
     {"section": _SEC_WALLET,  "label": "SOL balance",                          "fn": _do_balance},
-    {"section": _SEC_WALLET,  "label": "SOL balance  (confidential · Arcium)", "fn": _do_cbalance},
     {"section": _SEC_WALLET,  "label": "SPL token accounts",                   "fn": _do_tokens},
     {"section": _SEC_SEND,    "label": "Send SOL",                             "fn": _do_send_sol},
     {"section": _SEC_SEND,    "label": "Arcium payment  (beacon co-sign)",     "fn": _do_arcium_transfer},
@@ -532,7 +583,7 @@ def _render_header() -> None:
     if state.active_wallet:
         pk    = state.active_wallet["pubkey"]
         short = f"{pk[:8]}…{pk[-8:]}"
-        path  = state.active_wallet["path"]
+        path  = terminal_safe_text(state.active_wallet["path"])
         print(f"  {GREEN}◆{RESET}  {BOLD}{short}{RESET}  {DIM}{path}{RESET}")
 
     print(bar)

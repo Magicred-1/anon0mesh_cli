@@ -5,9 +5,13 @@ Requires: pip install solders
 
 import json
 import base64
+import os
+import stat
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 import pytest
+import beacon as beacon_module
 import state
 import wallet
 
@@ -16,15 +20,57 @@ pytestmark = pytest.mark.skipif(
 )
 
 from solders.keypair import Keypair
+from solders.transaction import Transaction
 
 # A known valid base58 Hash string (all 1s — the default/zero hash)
 ZERO_HASH = "11111111111111111111111111111111"
+MXE_PUBKEY_HEX = "00" * 32
 
 
 def _write_keypair(path: Path) -> Keypair:
     kp = Keypair()
     path.write_text(json.dumps(list(bytes(kp))))
     return kp
+
+
+def _arcium_accounts() -> dict[str, str]:
+    return {
+        name: str(Keypair().pubkey())
+        for name in (
+            "mxeAccount",
+            "compDefAccount",
+            "mempoolAccount",
+            "executingPool",
+            "computationAccount",
+            "clusterAccount",
+            "poolAccount",
+            "clockAccount",
+        )
+    }
+
+
+def test_load_private_keypair_repairs_permissions(tmp_path):
+    path = tmp_path / "legacy.json"
+    expected = _write_keypair(path)
+    path.chmod(0o666)
+
+    loaded = wallet._load_private_keypair(path)
+
+    assert loaded.pubkey() == expected.pubkey()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_load_private_keypair_refuses_symlink_without_chmod_target(tmp_path):
+    target = tmp_path / "target.json"
+    _write_keypair(target)
+    target.chmod(0o666)
+    path = tmp_path / "wallet.json"
+    path.symlink_to(target)
+
+    with pytest.raises(OSError, match="Refusing symlinked keypair path"):
+        wallet._load_private_keypair(path)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o666
 
 
 # ── generate_wallet ───────────────────────────────────────────────────────────
@@ -61,10 +107,72 @@ def test_generate_wallet_keypair_is_valid(tmp_path):
     assert str(kp.pubkey()) == state.active_wallet["pubkey"]
 
 
+def test_generate_wallet_permissions_owner_only(tmp_path):
+    path = tmp_path / "w.json"
+    path.write_text("existing file with permissive mode")
+    path.chmod(0o666)
+    wallet.generate_wallet(str(path))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 def test_generate_wallet_bad_path(capsys):
     result = wallet.generate_wallet("/nonexistent_dir/wallet.json")
     assert result is None
     assert "Failed to save" in capsys.readouterr().out
+
+
+def test_generate_wallet_refuses_symlink_target(tmp_path, capsys):
+    target = tmp_path / "keep.txt"
+    target.write_text("keep")
+    path = tmp_path / "wallet.json"
+    path.symlink_to(target)
+
+    result = wallet.generate_wallet(str(path))
+
+    assert result is None
+    assert target.read_text() == "keep"
+    assert "Failed to save" in capsys.readouterr().out
+
+
+def test_generate_wallet_refuses_fifo_target(tmp_path, capsys):
+    path = tmp_path / "wallet.json"
+    os.mkfifo(path)
+
+    assert wallet.generate_wallet(str(path)) is None
+    assert "Failed to save" in capsys.readouterr().out
+
+
+def test_generate_wallet_replaces_hardlink_without_modifying_sibling(tmp_path):
+    sibling = tmp_path / "keep.txt"
+    sibling.write_text("keep")
+    path = tmp_path / "wallet.json"
+    os.link(sibling, path)
+
+    assert wallet.generate_wallet(str(path)) == str(path)
+
+    assert sibling.read_text() == "keep"
+    assert path.read_text() != "keep"
+    assert path.stat().st_ino != sibling.stat().st_ino
+
+
+def test_generate_wallet_cleans_up_temp_file_after_replace_failure(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "wallet.json"
+    monkeypatch.setattr(wallet.os, "replace", MagicMock(side_effect=OSError("refused")))
+
+    assert wallet.generate_wallet(str(path)) is None
+
+    assert list(tmp_path.iterdir()) == []
+    assert "Failed to save" in capsys.readouterr().out
+
+
+def test_generate_wallet_escapes_terminal_control_bytes_in_path(tmp_path, capsys):
+    path = str(tmp_path / "before\x1b[2Jafter.json")
+
+    assert wallet.generate_wallet(path) == path
+
+    output = capsys.readouterr().out
+    assert r"before\x1b[2Jafter.json" in output
+    assert "\x1b[2J" not in output
 
 
 # ── import_wallet ─────────────────────────────────────────────────────────────
@@ -98,6 +206,13 @@ def test_import_wallet_json_array_saves_file(tmp_path):
     wallet.import_wallet(json.dumps(list(bytes(kp))), path)
     saved = json.loads(Path(path).read_text())
     assert saved == list(bytes(kp))
+
+
+def test_import_wallet_permissions_owner_only(tmp_path):
+    kp = Keypair()
+    path = tmp_path / "imported.json"
+    wallet.import_wallet(json.dumps(list(bytes(kp))), str(path))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_import_wallet_invalid_json_array(tmp_path, capsys):
@@ -168,6 +283,30 @@ def test_scan_nonce_accounts_returns_path_and_pubkey(tmp_path, monkeypatch):
     assert result[0]["pubkey"] == str(kp.pubkey())
 
 
+def test_scan_nonce_accounts_repairs_legacy_permissions(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "nonce_test1234.json"
+    path.write_text(json.dumps(list(bytes(Keypair()))))
+    path.chmod(0o666)
+    wallet.scan_nonce_accounts()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_scan_nonce_accounts_caps_discovery_by_filename(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wallet, "MAX_DISCOVERED_NONCE_ACCOUNTS", 2)
+    expected = []
+    for suffix in ("a", "b", "c"):
+        kp = Keypair()
+        (tmp_path / f"nonce_{suffix}.json").write_text(json.dumps(list(bytes(kp))))
+        expected.append(str(kp.pubkey()))
+
+    result = wallet.scan_nonce_accounts()
+
+    assert [item["pubkey"] for item in result] == expected[:2]
+    assert "scanning the first filenames only" in capsys.readouterr().out
+
+
 # ── auto_load_wallet ──────────────────────────────────────────────────────────
 
 def test_auto_load_finds_wallet_json(tmp_path, monkeypatch):
@@ -179,6 +318,15 @@ def test_auto_load_finds_wallet_json(tmp_path, monkeypatch):
     assert state.active_wallet is not None
     assert state.active_wallet["pubkey"] == str(kp.pubkey())
     assert "wallet.json" in state.active_wallet["path"]
+
+
+def test_auto_load_repairs_legacy_wallet_permissions(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "wallet.json"
+    path.write_text(json.dumps(list(bytes(Keypair()))))
+    path.chmod(0o666)
+    wallet.auto_load_wallet()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_auto_load_finds_wallet_prefix(tmp_path, monkeypatch):
@@ -210,11 +358,74 @@ def test_auto_load_skips_corrupt_file(tmp_path, monkeypatch):
     assert state.active_wallet is None
 
 
+def test_auto_load_skips_dangling_symlink_candidate(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    expected = _write_keypair(tmp_path / "wallet_fallback.json")
+    (tmp_path / "wallet_newer.json").symlink_to(tmp_path / "missing.json")
+    state.active_wallet = None
+
+    wallet.auto_load_wallet()
+
+    assert state.active_wallet is not None
+    assert state.active_wallet["pubkey"] == str(expected.pubkey())
+
+
 def test_auto_load_nothing_found(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     state.active_wallet = None
     wallet.auto_load_wallet()
     assert state.active_wallet is None
+
+
+def test_auto_load_wallet_caps_generated_candidates(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wallet, "MAX_AUTOLOAD_WALLET_CANDIDATES", 2)
+    load = MagicMock(side_effect=OSError("corrupt"))
+    monkeypatch.setattr(wallet, "_load_private_keypair", load)
+    for index in range(3):
+        path = tmp_path / f"wallet_{index}.json"
+        path.write_text("unused")
+        os.utime(path, (index, index))
+    state.active_wallet = None
+
+    wallet.auto_load_wallet()
+
+    assert state.active_wallet is None
+    assert load.call_count == 2
+    assert "trying the newest candidates only" in capsys.readouterr().out
+
+
+# ── offline_sign_transfer ─────────────────────────────────────────────────────
+
+def test_offline_sign_transfer_invalid_recipient(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.offline_sign_transfer(
+        str(tmp_path / "payer.json"),
+        "not-a-valid-pubkey",
+        1,
+        ZERO_HASH,
+    )
+    assert result is None
+    assert "Invalid recipient address" in capsys.readouterr().out
+
+
+def test_offline_sign_transfer_invalid_blockhash(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.offline_sign_transfer(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        1,
+        "not-a-valid-blockhash",
+    )
+    assert result is None
+    assert "Invalid blockhash" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("lamports", [-1, 1 << 64])
+def test_offline_sign_transfer_rejects_out_of_range_lamports(capsys, lamports):
+    result = wallet.offline_sign_transfer("unused.json", str(Keypair().pubkey()), lamports, ZERO_HASH)
+    assert result is None
+    assert "Lamports must be an integer between" in capsys.readouterr().out
 
 
 # ── offline_sign_nonce_transfer ───────────────────────────────────────────────
@@ -280,13 +491,71 @@ def test_offline_sign_nonce_transfer_zero_lamports_still_signs(tmp_path):
     assert tx is not None
 
 
+@pytest.mark.parametrize("nonce_account,to_address", [
+    ("not-a-valid-pubkey", str(Keypair().pubkey())),
+    (str(Keypair().pubkey()), "not-a-valid-pubkey"),
+])
+def test_offline_sign_nonce_transfer_invalid_address(tmp_path, capsys, nonce_account, to_address):
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.offline_sign_nonce_transfer(
+        str(tmp_path / "payer.json"),
+        nonce_account,
+        str(tmp_path / "payer.json"),
+        to_address,
+        1,
+        ZERO_HASH,
+    )
+    assert result is None
+    assert "Invalid address" in capsys.readouterr().out
+
+
+def test_offline_sign_nonce_transfer_invalid_nonce_value(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.offline_sign_nonce_transfer(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        1,
+        "not-a-valid-blockhash",
+    )
+    assert result is None
+    assert "Invalid nonce value" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("lamports", [-1, 1 << 64])
+def test_offline_sign_nonce_transfer_rejects_out_of_range_lamports(capsys, lamports):
+    result = wallet.offline_sign_nonce_transfer(
+        "unused-payer.json",
+        str(Keypair().pubkey()),
+        "unused-auth.json",
+        str(Keypair().pubkey()),
+        lamports,
+        ZERO_HASH,
+    )
+    assert result is None
+    assert "Lamports must be an integer between" in capsys.readouterr().out
+
+
 # ── partial_sign_execute_payment ──────────────────────────────────────────────
 
-def test_partial_sign_execute_payment_returns_base64(tmp_path):
+@patch("wallet._account_exists", return_value=True)
+@patch("arcium_client._run_shim")
+@patch("arcium_client.rescue_encrypt")
+def test_partial_sign_execute_payment_returns_base64(
+    mock_encrypt, mock_shim, _mock_exists, tmp_path, monkeypatch,
+):
     payer   = _write_keypair(tmp_path / "payer.json")
     beacon  = Keypair()
     to      = Keypair()
     nonce   = Keypair()
+    mint    = Keypair()
+    mock_encrypt.return_value = {
+        "ciphertexts": [[0] * 32],
+        "pubkey_hex": "00" * 32,
+        "nonce_bn": "0",
+    }
+    mock_shim.return_value = _arcium_accounts()
 
     tx = wallet.partial_sign_execute_payment(
         str(tmp_path / "payer.json"),
@@ -294,11 +563,15 @@ def test_partial_sign_execute_payment_returns_base64(tmp_path):
         str(nonce.pubkey()),
         str(to.pubkey()),
         500_000,
-        ZERO_HASH,
+        MXE_PUBKEY_HEX,
+        str(mint.pubkey()),
+        nonce_value=ZERO_HASH,
     )
     assert tx is not None
     decoded = base64.b64decode(tx)
     assert len(decoded) > 0
+    monkeypatch.setattr(beacon_module, "beacon_cosign_keypair", beacon)
+    assert beacon_module._validate_cosign_transaction(Transaction.from_bytes(decoded)) is None
 
 
 def test_partial_sign_execute_payment_missing_keypair(tmp_path, capsys):
@@ -308,7 +581,8 @@ def test_partial_sign_execute_payment_missing_keypair(tmp_path, capsys):
         str(Keypair().pubkey()),
         str(Keypair().pubkey()),
         1_000,
-        ZERO_HASH,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
     )
     assert result is None
     assert "Failed to load" in capsys.readouterr().out
@@ -322,32 +596,303 @@ def test_partial_sign_execute_payment_invalid_address(tmp_path, capsys):
         "also-invalid",
         "still-invalid",
         1_000,
-        ZERO_HASH,
+        MXE_PUBKEY_HEX,
+        "invalid-mint",
     )
     assert result is None
     assert "Invalid address" in capsys.readouterr().out
 
 
+def test_partial_sign_execute_payment_invalid_broadcaster_token_account(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.partial_sign_execute_payment(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        1_000,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+        broadcaster_token_account_str="not-a-valid-pubkey",
+    )
+    assert result is None
+    assert "Invalid address" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("amount", [-1, 1 << 64])
+def test_partial_sign_execute_payment_rejects_out_of_range_amount(capsys, amount):
+    result = wallet.partial_sign_execute_payment(
+        "unused.json",
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        amount,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+    )
+    assert result is None
+    assert "Amount must be an integer between" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("cluster_offset", [-1, True, 1 << 32])
+def test_partial_sign_execute_payment_rejects_out_of_range_cluster_offset(capsys, cluster_offset):
+    result = wallet.partial_sign_execute_payment(
+        "unused.json",
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        1_000,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+        cluster_offset=cluster_offset,
+    )
+    assert result is None
+    assert "Cluster offset must be an integer between" in capsys.readouterr().out
+
+
+@patch("wallet._account_exists", return_value=True)
+@patch("arcium_client._run_shim")
+@patch("arcium_client.rescue_encrypt")
+def test_partial_sign_execute_payment_invalid_nonce_value(mock_encrypt, mock_shim, _mock_exists, tmp_path, capsys):
+    mock_encrypt.return_value = {
+        "ciphertexts": [[0] * 32],
+        "pubkey_hex": "00" * 32,
+        "nonce_bn": "0",
+    }
+    mock_shim.return_value = _arcium_accounts()
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.partial_sign_execute_payment(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        1_000,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+        nonce_value="not-a-valid-blockhash",
+    )
+    assert result is None
+    assert "Invalid nonce value" in capsys.readouterr().out
+
+
+@patch("arcium_client._run_shim")
+@patch("arcium_client.rescue_encrypt")
+def test_partial_sign_execute_payment_invalid_encryption_payload(mock_encrypt, mock_shim, tmp_path, capsys):
+    mock_encrypt.return_value = {}
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.partial_sign_execute_payment(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        1_000,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+    )
+    assert result is None
+    assert "Invalid Arcium encryption payload" in capsys.readouterr().out
+    mock_shim.assert_not_called()
+
+
+@pytest.mark.parametrize("payload", [
+    {"ciphertexts": [[0] * 31], "pubkey_hex": "00" * 32, "nonce_bn": "0"},
+    {"ciphertexts": [[0] * 32], "pubkey_hex": "00" * 31, "nonce_bn": "0"},
+    {"ciphertexts": [[0] * 32], "pubkey_hex": "00" * 32, "nonce_bn": True},
+    {"ciphertexts": [[0] * 32], "pubkey_hex": "00" * 32, "nonce_bn": "-1"},
+    {"ciphertexts": [[0] * 32], "pubkey_hex": "00" * 32, "nonce_bn": "9" * 100_000},
+    {"ciphertexts": [[0] * 32], "pubkey_hex": "00" * 32, "nonce_bn": "١"},
+])
+@patch("arcium_client._run_shim")
+@patch("arcium_client.rescue_encrypt")
+def test_partial_sign_execute_payment_rejects_malformed_encryption_fields(
+    mock_encrypt, mock_shim, tmp_path, capsys, payload,
+):
+    mock_encrypt.return_value = payload
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.partial_sign_execute_payment(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        1_000,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+    )
+    assert result is None
+    assert "Invalid Arcium encryption payload" in capsys.readouterr().out
+    mock_shim.assert_not_called()
+
+
+@patch("arcium_client._run_shim")
+@patch("arcium_client.rescue_encrypt")
+def test_partial_sign_execute_payment_invalid_account_metadata(mock_encrypt, mock_shim, tmp_path, capsys):
+    mock_encrypt.return_value = {
+        "ciphertexts": [[0] * 32],
+        "pubkey_hex": "00" * 32,
+        "nonce_bn": "0",
+    }
+    mock_shim.return_value = {"mxeAccount": "not-a-valid-pubkey"}
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.partial_sign_execute_payment(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        1_000,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+    )
+    assert result is None
+    assert "Invalid Arcium account metadata" in capsys.readouterr().out
+
+
 # ── create_nonce_account (instruction build) ──────────────────────────────────
 
-def test_create_nonce_account_authority_param_name(tmp_path, monkeypatch):
+def test_create_nonce_account_authority_param_name(tmp_path):
     """
     Regression: InitializeNonceAccountParams uses 'authority', not 'authorized_pubkey'.
     Mock out RPC calls and verify the instruction builds without ValueError.
     """
-    from unittest.mock import patch, MagicMock
     _write_keypair(tmp_path / "payer.json")
+    _write_keypair(tmp_path / "nonce.json")
 
-    mock_rpc = MagicMock()
-    mock_rpc.return_value = {"result": 1_447_680}          # rent
     mock_blockhash = MagicMock(return_value="4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi")
-    mock_send = MagicMock(return_value={"result": "SIG"})
 
-    with patch("wallet.rpc_call", mock_rpc), \
-         patch("wallet.get_recent_blockhash", mock_blockhash), \
-         patch("wallet.rpc_call", mock_send):
+    with patch("rpc.rpc_call", side_effect=[{"result": 1_447_680}, {"result": "SIG"}]), \
+         patch("rpc.get_recent_blockhash", mock_blockhash):
         # The call must not raise ValueError: Missing required key: authority
         try:
-            wallet.create_nonce_account(str(tmp_path / "payer.json"), None, None)
+            result = wallet.create_nonce_account(
+                str(tmp_path / "payer.json"),
+                str(tmp_path / "nonce.json"),
+                None,
+            )
         except ValueError as e:
             pytest.fail(f"InitializeNonceAccountParams raised ValueError: {e}")
+    assert result is not None
+
+
+def test_create_nonce_account_generated_key_permissions(tmp_path, monkeypatch):
+    _write_keypair(tmp_path / "payer.json")
+    monkeypatch.chdir(tmp_path)
+    mock_blockhash = MagicMock(return_value="4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi")
+
+    with patch("rpc.rpc_call", side_effect=[{"result": 1_447_680}, {"result": "SIG"}]), \
+         patch("rpc.get_recent_blockhash", mock_blockhash):
+        result = wallet.create_nonce_account(str(tmp_path / "payer.json"))
+
+    assert result is not None
+    nonce_paths = list(tmp_path.glob("nonce_*.json"))
+    assert len(nonce_paths) == 1
+    assert stat.S_IMODE(nonce_paths[0].stat().st_mode) == 0o600
+
+
+def test_create_nonce_account_removes_generated_key_after_presubmit_failure(tmp_path, monkeypatch):
+    _write_keypair(tmp_path / "payer.json")
+    monkeypatch.chdir(tmp_path)
+
+    with patch("rpc.rpc_call", return_value=None):
+        result = wallet.create_nonce_account(str(tmp_path / "payer.json"))
+
+    assert result is None
+    assert list(tmp_path.glob("nonce_*.json")) == []
+
+
+def test_create_nonce_account_preserves_generated_key_after_uncertain_submission(tmp_path, monkeypatch):
+    _write_keypair(tmp_path / "payer.json")
+    monkeypatch.chdir(tmp_path)
+    blockhash = "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+
+    with patch("rpc.rpc_call", side_effect=[{"result": 1_447_680}, None]), \
+         patch("rpc.get_recent_blockhash", return_value=blockhash):
+        result = wallet.create_nonce_account(str(tmp_path / "payer.json"))
+
+    assert result is None
+    assert len(list(tmp_path.glob("nonce_*.json"))) == 1
+
+
+def test_create_nonce_account_generated_key_write_failure(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+
+    with patch("wallet._save_private_keypair", side_effect=OSError("refused")):
+        result = wallet.create_nonce_account(str(tmp_path / "payer.json"))
+
+    assert result is None
+    assert "Failed to save nonce keypair: refused" in capsys.readouterr().out
+
+
+def test_create_nonce_account_invalid_authority(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    _write_keypair(tmp_path / "nonce.json")
+    result = wallet.create_nonce_account(
+        str(tmp_path / "payer.json"),
+        str(tmp_path / "nonce.json"),
+        "not-a-valid-pubkey",
+    )
+    assert result is None
+    assert "Invalid authority address" in capsys.readouterr().out
+
+
+def test_create_nonce_account_invalid_blockhash(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    _write_keypair(tmp_path / "nonce.json")
+
+    with patch("rpc.rpc_call", return_value={"result": 1_447_680}), \
+         patch("rpc.get_recent_blockhash", return_value="not-a-valid-blockhash"):
+        result = wallet.create_nonce_account(
+            str(tmp_path / "payer.json"),
+            str(tmp_path / "nonce.json"),
+            None,
+        )
+
+    assert result is None
+    assert "Invalid blockhash" in capsys.readouterr().out
+
+
+def test_create_nonce_account_scalar_send_error(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    _write_keypair(tmp_path / "nonce.json")
+    blockhash = "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+
+    with patch("rpc.rpc_call", side_effect=[{"result": 1_447_680}, {"error": "busy"}]), \
+         patch("rpc.get_recent_blockhash", return_value=blockhash):
+        result = wallet.create_nonce_account(
+            str(tmp_path / "payer.json"),
+            str(tmp_path / "nonce.json"),
+            None,
+        )
+
+    assert result is None
+    assert "busy" in capsys.readouterr().out
+
+
+def test_create_nonce_account_rejects_boolean_rent(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    _write_keypair(tmp_path / "nonce.json")
+
+    with patch("rpc.rpc_call", return_value={"result": True}):
+        result = wallet.create_nonce_account(
+            str(tmp_path / "payer.json"),
+            str(tmp_path / "nonce.json"),
+            None,
+        )
+
+    assert result is None
+    assert "Unexpected getMinimumBalanceForRentExemption response" in capsys.readouterr().out
+
+
+def test_create_nonce_account_rejects_missing_signature(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+    _write_keypair(tmp_path / "nonce.json")
+    blockhash = "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+
+    with patch("rpc.rpc_call", side_effect=[{"result": 1_447_680}, {"result": None}]), \
+         patch("rpc.get_recent_blockhash", return_value=blockhash):
+        result = wallet.create_nonce_account(
+            str(tmp_path / "payer.json"),
+            str(tmp_path / "nonce.json"),
+            None,
+        )
+
+    assert result is None
+    assert "Unexpected sendTransaction response" in capsys.readouterr().out

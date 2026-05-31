@@ -33,18 +33,17 @@ import argparse
 from pathlib import Path
 
 # ── Load .env before any module imports that may read env vars ─────────────────
+from shared import load_dotenv_private
+
 _env = Path(__file__).parent / ".env"
-if _env.exists():
-    for _l in _env.read_text().splitlines():
-        _l = _l.strip()
-        if _l and not _l.startswith("#") and "=" in _l:
-            import os as _os
-            _k, _v = _l.split("=", 1)
-            _os.environ.setdefault(_k.strip(), _v.strip())
+load_dotenv_private(_env)
 
 # ── Module imports (after .env is loaded) ──────────────────────────────────────
 import state
-from shared import banner, log_info, log_ok, log_warn, log_err, YELLOW, GREEN, BOLD, DIM, RESET
+from shared import (
+    banner, log_info, log_ok, log_warn, log_err, positive_int,
+    YELLOW, GREEN, BOLD, DIM, RESET,
+)
 from mesh import BeaconPool, BeaconAnnounceHandler, start_reticulum, connect_all_parallel
 from rpc import (
     get_balance, confidential_get_balance,
@@ -73,11 +72,11 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Auto-discover beacons via RNS announces")
     parser.add_argument("--strategy", default="race", choices=["race", "fallback"])
     parser.add_argument("--config",   "-c", default=None)
-    parser.add_argument("--timeout",  "-t", default=30, type=int)
+    parser.add_argument("--timeout",  "-t", default=30, type=positive_int)
     parser.add_argument("--no-identify", action="store_true")
     parser.add_argument("--balance",     metavar="ADDRESS")
     parser.add_argument("--cbalance",    metavar="ADDRESS",
-                        help="Confidential balance via Arcium MPC")
+                        help="Unavailable compatibility flag: no MPC balance-query handler exists")
     parser.add_argument("--slot",        action="store_true")
     parser.add_argument("--blockhash",   action="store_true")
     parser.add_argument("--send-tx",     metavar="BASE64_TX")
@@ -144,7 +143,7 @@ def _setup_beacons(args, one_shot: bool) -> None:
     if args.beacon:
         _connect_beacons(args, one_shot)
 
-    if one_shot and args.discover and not args.beacon:
+    if one_shot and args.discover and not state.pool.active_links():
         _wait_for_discover_beacon()
 
     if one_shot:
@@ -155,13 +154,21 @@ def _setup_beacons(args, one_shot: bool) -> None:
 # One-shot command handlers
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _relay_requested() -> bool:
+    try:
+        return input(_RELAY_PROMPT).strip().lower() == "y"
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+
 def _cmd_sign_offline(args) -> None:
     if not (args.from_keypair and args.to and args.lamports):
         log_err("--sign-offline requires --from, --to, --lamports")
         return
     tx_b64 = offline_sign_transfer(
         args.from_keypair, args.to, args.lamports, args.blockhash_value)
-    if tx_b64 and input(_RELAY_PROMPT).strip().lower() == "y":
+    if tx_b64 and _relay_requested():
         send_transaction(tx_b64)
 
 
@@ -181,7 +188,7 @@ def _cmd_sign_nonce_tx(args) -> None:
         args.from_keypair, args.nonce_account, auth_path,
         args.to, args.lamports, args.nonce_value,
     )
-    if tx_b64 and input(_RELAY_PROMPT).strip().lower() == "y":
+    if tx_b64 and _relay_requested():
         send_transaction(tx_b64)
 
 

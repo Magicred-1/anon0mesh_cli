@@ -10,12 +10,15 @@ import os
 import json
 import base64
 import hashlib
+import heapq
 import secrets as _secrets
+import stat
+import tempfile
 from pathlib import Path
 
 import state
 from shared import (
-    log_info, log_ok, log_warn, log_err,
+    log_info, log_ok, log_warn, log_err, rpc_error_message, terminal_safe_text,
     BOLD, GREEN, YELLOW, RED, RESET, DIM,
 )
 
@@ -39,6 +42,86 @@ except ImportError:
 # Fixed size of a nonce account on Solana (defined by the runtime)
 NONCE_ACCOUNT_LENGTH = 80
 _ERR_NONCE = "Could not fetch nonce account"
+_MAX_U32 = (1 << 32) - 1
+_MAX_U64 = (1 << 64) - 1
+MAX_DISCOVERED_NONCE_ACCOUNTS = 100
+MAX_AUTOLOAD_WALLET_CANDIDATES = 100
+
+
+def _validate_u64(value: int, label: str) -> bool:
+    """Return whether a value can be encoded as an unsigned Solana u64."""
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= _MAX_U64:
+        log_err(f"{label} must be an integer between 0 and {_MAX_U64}")
+        return False
+    return True
+
+
+def _save_private_keypair(path: str, keypair: "Keypair") -> None:
+    """Atomically write a Solana keypair with owner-only permissions."""
+    try:
+        destination_mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        pass
+    else:
+        if stat.S_ISLNK(destination_mode):
+            raise OSError(f"Refusing symlinked keypair path: {path}")
+        if not stat.S_ISREG(destination_mode):
+            raise OSError(f"Refusing non-regular keypair path: {path}")
+
+    directory = os.path.dirname(path) or "."
+    prefix = f".{os.path.basename(path)}."
+    previous_umask = os.umask(0o077)
+    fd = -1
+    temp_path = ""
+    try:
+        fd, temp_path = tempfile.mkstemp(prefix=prefix, dir=directory)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"Refusing non-regular keypair temp path: {temp_path}")
+        os.fchmod(fd, 0o600)
+        file_obj = os.fdopen(fd, "w")
+        fd = -1
+        with file_obj as f:
+            json.dump(list(bytes(keypair)), f)
+        os.replace(temp_path, path)
+        temp_path = ""
+    finally:
+        if fd != -1:
+            os.close(fd)
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+        os.umask(previous_umask)
+
+
+def _restrict_private_keypair_permissions(fd: int, path: str | Path) -> None:
+    """Repair legacy local keypair files created with permissive modes."""
+    try:
+        if stat.S_IMODE(os.fstat(fd).st_mode) != 0o600:
+            os.fchmod(fd, 0o600)
+            log_warn(f"Restricted keypair permissions to 0600: {path}")
+    except OSError as exc:
+        log_warn(f"Could not restrict keypair permissions for {path}: {exc}")
+
+
+def _load_private_keypair(path: str | Path) -> "Keypair":
+    """Load a regular local keypair without following a final symlink."""
+    if os.path.islink(path):
+        raise OSError(f"Refusing symlinked keypair path: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"Refusing non-regular keypair path: {path}")
+        _restrict_private_keypair_permissions(fd, path)
+        file_obj = os.fdopen(fd)
+        fd = -1
+        with file_obj as f:
+            return Keypair.from_bytes(bytes(json.load(f)))
+    finally:
+        if fd != -1:
+            os.close(fd)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -63,16 +146,29 @@ def auto_load_wallet() -> None:
     if exact.exists():
         candidates.append(exact)
 
-    candidates += sorted(
-        Path(".").glob("wallet_*.json"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
+    def generated_candidates():
+        for path in Path(".").glob("wallet_*.json"):
+            try:
+                yield path.lstat().st_mtime, path
+            except OSError:
+                continue
+
+    generated = heapq.nlargest(
+        MAX_AUTOLOAD_WALLET_CANDIDATES + 1,
+        generated_candidates(),
+        key=lambda item: item[0],
     )
+    if len(generated) > MAX_AUTOLOAD_WALLET_CANDIDATES:
+        log_warn(
+            f"Found more than {MAX_AUTOLOAD_WALLET_CANDIDATES} generated wallet files; "
+            "trying the newest candidates only"
+        )
+        generated = generated[:MAX_AUTOLOAD_WALLET_CANDIDATES]
+    candidates += [path for _, path in generated]
 
     for path in candidates:
         try:
-            with open(path) as f:
-                kp = Keypair.from_bytes(bytes(json.load(f)))
+            kp = _load_private_keypair(path)
             pubkey = str(kp.pubkey())
             state.active_wallet = {"pubkey": pubkey, "path": str(path)}
             log_ok(f"Wallet loaded: {pubkey}  ({path})")
@@ -99,18 +195,18 @@ def generate_wallet(save_path: str | None = None) -> str | None:
     path   = save_path or f"wallet_{pubkey[:8]}.json"
 
     try:
-        with open(path, "w") as f:
-            json.dump(list(bytes(kp)), f)
+        _save_private_keypair(path, kp)
     except OSError as exc:
         log_err(f"Failed to save keypair: {exc}")
         return None
 
     state.active_wallet = {"pubkey": pubkey, "path": path}
 
+    safe_path = terminal_safe_text(path)
     print(f"\n  {GREEN}{BOLD}New wallet generated{RESET}")
     print(f"  Public key:  {BOLD}{pubkey}{RESET}")
-    print(f"  Saved to:    {path}")
-    print(f"\n  {YELLOW}{BOLD}IMPORTANT:{RESET} Back up {path!r} — it contains your private key.")
+    print(f"  Saved to:    {safe_path}")
+    print(f"\n  {YELLOW}{BOLD}IMPORTANT:{RESET} Back up {safe_path!r} — it contains your private key.")
     print(f"  {DIM}Anyone with this file can spend funds from this wallet.{RESET}\n")
     return path
 
@@ -164,8 +260,7 @@ def import_wallet(raw: str, save_path: str) -> str | None:
             return None
 
     try:
-        with open(save_path, "w") as f:
-            json.dump(list(bytes(kp)), f)
+        _save_private_keypair(save_path, kp)
     except OSError as exc:
         log_err(f"Failed to save keypair: {exc}")
         return None
@@ -173,10 +268,11 @@ def import_wallet(raw: str, save_path: str) -> str | None:
     pubkey = str(kp.pubkey())
     state.active_wallet = {"pubkey": pubkey, "path": save_path}
 
+    safe_path = terminal_safe_text(save_path)
     print(f"\n  {GREEN}{BOLD}Wallet imported{RESET}")
     print(f"  Public key:  {BOLD}{pubkey}{RESET}")
-    print(f"  Saved to:    {save_path}")
-    print(f"\n  {YELLOW}{BOLD}IMPORTANT:{RESET} Back up {save_path!r} — it contains your private key.\n")
+    print(f"  Saved to:    {safe_path}")
+    print(f"\n  {YELLOW}{BOLD}IMPORTANT:{RESET} Back up {safe_path!r} — it contains your private key.\n")
     return pubkey
 
 
@@ -191,11 +287,20 @@ def scan_nonce_accounts() -> list[dict]:
     """
     if not HAS_SOLDERS:
         return []
+    paths = heapq.nsmallest(
+        MAX_DISCOVERED_NONCE_ACCOUNTS + 1,
+        Path(".").glob("nonce_*.json"),
+    )
+    if len(paths) > MAX_DISCOVERED_NONCE_ACCOUNTS:
+        log_warn(
+            f"Found more than {MAX_DISCOVERED_NONCE_ACCOUNTS} nonce keypair files; "
+            "scanning the first filenames only"
+        )
+        paths = paths[:MAX_DISCOVERED_NONCE_ACCOUNTS]
     result = []
-    for path in sorted(Path(".").glob("nonce_*.json")):
+    for path in paths:
         try:
-            with open(path) as f:
-                kp = Keypair.from_bytes(bytes(json.load(f)))
+            kp = _load_private_keypair(path)
             result.append({"path": str(path), "pubkey": str(kp.pubkey())})
         except Exception:
             continue
@@ -210,15 +315,20 @@ def offline_sign_transfer(keypair_json_path, to_address, lamports, blockhash=Non
     if not HAS_SOLDERS:
         log_err("Offline signing requires: pip install solders")
         return None
+    if not _validate_u64(lamports, "Lamports"):
+        return None
     try:
-        with open(keypair_json_path) as f:
-            keypair = Keypair.from_bytes(bytes(json.load(f)))
+        keypair = _load_private_keypair(keypair_json_path)
     except Exception as exc:
         log_err(f"Failed to load keypair: {exc}")
         return None
 
     from_pubkey = keypair.pubkey()
-    to_pubkey   = Pubkey.from_string(to_address)
+    try:
+        to_pubkey = Pubkey.from_string(to_address)
+    except ValueError as exc:
+        log_err(f"Invalid recipient address: {exc}")
+        return None
     log_info(f"Signing  from={from_pubkey}  to={to_pubkey}  lamports={lamports}")
 
     if blockhash is None:
@@ -228,10 +338,16 @@ def offline_sign_transfer(keypair_json_path, to_address, lamports, blockhash=Non
             log_err("Could not obtain blockhash")
             return None
 
+    try:
+        blockhash_value = Hash.from_string(blockhash)
+    except Exception as exc:
+        log_err(f"Invalid blockhash: {exc}")
+        return None
+
     ix  = transfer(TransferParams(from_pubkey=from_pubkey, to_pubkey=to_pubkey, lamports=lamports))
-    msg = Message.new_with_blockhash([ix], from_pubkey, Hash.from_string(blockhash))
+    msg = Message.new_with_blockhash([ix], from_pubkey, blockhash_value)
     tx  = Transaction.new_unsigned(msg)
-    tx.sign([keypair], Hash.from_string(blockhash))
+    tx.sign([keypair], blockhash_value)
     tx_b64 = base64.b64encode(bytes(tx)).decode("utf-8")
     log_ok(f"Transaction signed offline ({len(tx_b64)} chars)")
     print(f"\n  Signed TX: {BOLD}{tx_b64[:72]}...{RESET}\n")
@@ -323,6 +439,11 @@ def partial_sign_execute_payment(
     if not HAS_SOLDERS:
         log_err("Requires: pip install solders")
         return None
+    if not _validate_u64(amount, "Amount"):
+        return None
+    if isinstance(cluster_offset, bool) or not isinstance(cluster_offset, int) or not 0 <= cluster_offset <= _MAX_U32:
+        log_err(f"Cluster offset must be an integer between 0 and {_MAX_U32}")
+        return None
 
     try:
         from arcium_client import rescue_encrypt, _run_shim
@@ -331,20 +452,25 @@ def partial_sign_execute_payment(
         return None
 
     try:
-        with open(payer_keypair_path) as f:
-            payer = Keypair.from_bytes(bytes(json.load(f)))
+        payer = _load_private_keypair(payer_keypair_path)
     except Exception as exc:
         log_err(f"Failed to load keypair: {exc}")
         return None
 
-    payer_pubkey  = payer.pubkey()
-    beacon_pubkey = Pubkey.from_string(beacon_pubkey_str)
-    nonce_pubkey  = Pubkey.from_string(nonce_account_str)
-    prog_pubkey   = Pubkey.from_string(program_id_str)
-    mint_pubkey   = Pubkey.from_string(mint_str)
-    recipient_pk  = Pubkey.from_string(recipient_str)
-    # Treasury defaults to beacon/operator if not explicitly provided
-    treasury_pk   = Pubkey.from_string(treasury_str) if treasury_str else beacon_pubkey
+    payer_pubkey = payer.pubkey()
+    try:
+        beacon_pubkey = Pubkey.from_string(beacon_pubkey_str)
+        nonce_pubkey  = Pubkey.from_string(nonce_account_str)
+        prog_pubkey   = Pubkey.from_string(program_id_str)
+        mint_pubkey   = Pubkey.from_string(mint_str)
+        recipient_pk  = Pubkey.from_string(recipient_str)
+        # Treasury defaults to beacon/operator if not explicitly provided
+        treasury_pk = Pubkey.from_string(treasury_str) if treasury_str else beacon_pubkey
+        broadcaster_ta = (Pubkey.from_string(broadcaster_token_account_str)
+                          if broadcaster_token_account_str else None)
+    except ValueError as exc:
+        log_err(f"Invalid address: {exc}")
+        return None
 
     # Random u64 computation offset — uniquely identifies this Arcium computation
     comp_offset = int.from_bytes(_secrets.token_bytes(8), "little")
@@ -355,10 +481,38 @@ def partial_sign_execute_payment(
     except Exception as exc:
         log_err(f"Arcium encrypt failed: {exc}")
         return None
-    pub_key_hex      = enc["pubkey_hex"]
-    nonce_bn         = int(enc["nonce_bn"])
-    # Rescue ciphertext for the amount — 32-byte field element passed to Arcium
-    encrypted_amount = bytes(enc["ciphertexts"][0])
+    try:
+        pub_key_hex = enc["pubkey_hex"]
+        nonce_raw = enc["nonce_bn"]
+        if (
+            not isinstance(nonce_raw, str)
+            or not nonce_raw.isascii()
+            or not nonce_raw.isdecimal()
+            or len(nonce_raw) > 39
+        ):
+            raise ValueError("nonce_bn must be an unsigned decimal string")
+        nonce_bn = int(nonce_raw)
+        # Rescue ciphertext for the amount — 32-byte field element passed to Arcium
+        encrypted_amount = bytes(enc["ciphertexts"][0])
+        if len(encrypted_amount) != 32:
+            raise ValueError("encrypted amount must be 32 bytes")
+        public_key = bytes.fromhex(pub_key_hex)
+        if len(public_key) != 32:
+            raise ValueError("ephemeral public key must be 32 bytes")
+        # Instruction data layout (fixed contract):
+        # [disc 8B][comp_offset 8B LE][amount 8B LE][encrypted_amount 32B][nonce 16B LE][pub_key 32B] = 104 bytes
+        disc = hashlib.sha256(b"global:execute_payment").digest()[:8]
+        ix_data = (
+            disc
+            + comp_offset.to_bytes(8, "little")
+            + amount.to_bytes(8, "little")
+            + encrypted_amount
+            + nonce_bn.to_bytes(16, "little")
+            + public_key
+        )
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        log_err(f"Invalid Arcium encryption payload: {exc}")
+        return None
 
     log_info("Fetching Arcium PDAs...")
     try:
@@ -371,9 +525,7 @@ def partial_sign_execute_payment(
     payer_ta       = _get_ata(payer_pubkey,  mint_pubkey)
     recipient_ta   = _get_ata(recipient_pk,  mint_pubkey)
     treasury_ta    = _get_ata(treasury_pk,   mint_pubkey)
-    broadcaster_ta = (Pubkey.from_string(broadcaster_token_account_str)
-                      if broadcaster_token_account_str
-                      else _get_ata(beacon_pubkey, mint_pubkey))
+    broadcaster_ta = broadcaster_ta or _get_ata(beacon_pubkey, mint_pubkey)
 
     # sign_pda_account: PDA derived from seeds=[b"ArciumSignerAccount"] on this program
     sign_pda, _   = Pubkey.find_program_address([b"ArciumSignerAccount"], prog_pubkey)
@@ -381,30 +533,22 @@ def partial_sign_execute_payment(
         [b"whitelist", bytes(mint_pubkey)], prog_pubkey
     )
 
-    # Instruction data layout (fixed contract):
-    # [disc 8B][comp_offset 8B LE][amount 8B LE][encrypted_amount 32B][nonce 16B LE][pub_key 32B] = 104 bytes
-    disc      = hashlib.sha256(b"global:execute_payment").digest()[:8]
-    ix_data   = (
-        disc
-        + comp_offset.to_bytes(8,  "little")
-        + amount.to_bytes(8,       "little")
-        + encrypted_amount                      # 32-byte Rescue ciphertext of amount
-        + nonce_bn.to_bytes(16,    "little")
-        + bytes.fromhex(pub_key_hex)
-    )
-
-    TOKEN_PROG          = Pubkey.from_string(_TOKEN_PROGRAM)
-    SYSTEM_PROG         = Pubkey.from_string(_SYSTEM_PROGRAM)
-    # arcium_program is hardcoded in the IDL — use the value from there, not the shim
-    ARCIUM_PROG         = Pubkey.from_string("Arcj82pX7HxYKLR92qvgZUAd7vGS1k4hQvAFcPATFdEQ")
-    MXE_ACCOUNT         = Pubkey.from_string(accs["mxeAccount"])
-    COMP_DEF_ACCOUNT    = Pubkey.from_string(accs["compDefAccount"])
-    MEMPOOL_ACCOUNT     = Pubkey.from_string(accs["mempoolAccount"])
-    EXECUTING_POOL      = Pubkey.from_string(accs["executingPool"])
-    COMPUTATION_ACCOUNT = Pubkey.from_string(accs["computationAccount"])
-    CLUSTER_ACCOUNT     = Pubkey.from_string(accs["clusterAccount"])
-    POOL_ACCOUNT        = Pubkey.from_string(accs["poolAccount"])
-    CLOCK_ACCOUNT       = Pubkey.from_string(accs["clockAccount"])
+    try:
+        TOKEN_PROG = Pubkey.from_string(_TOKEN_PROGRAM)
+        SYSTEM_PROG = Pubkey.from_string(_SYSTEM_PROGRAM)
+        # arcium_program is hardcoded in the IDL — use the value from there, not the shim
+        ARCIUM_PROG = Pubkey.from_string("Arcj82pX7HxYKLR92qvgZUAd7vGS1k4hQvAFcPATFdEQ")
+        MXE_ACCOUNT = Pubkey.from_string(accs["mxeAccount"])
+        COMP_DEF_ACCOUNT = Pubkey.from_string(accs["compDefAccount"])
+        MEMPOOL_ACCOUNT = Pubkey.from_string(accs["mempoolAccount"])
+        EXECUTING_POOL = Pubkey.from_string(accs["executingPool"])
+        COMPUTATION_ACCOUNT = Pubkey.from_string(accs["computationAccount"])
+        CLUSTER_ACCOUNT = Pubkey.from_string(accs["clusterAccount"])
+        POOL_ACCOUNT = Pubkey.from_string(accs["poolAccount"])
+        CLOCK_ACCOUNT = Pubkey.from_string(accs["clockAccount"])
+    except (KeyError, TypeError, ValueError) as exc:
+        log_err(f"Invalid Arcium account metadata: {exc}")
+        return None
 
     setup_ixs: list[Instruction] = []
 
@@ -497,7 +641,11 @@ def partial_sign_execute_payment(
             return None
         nonce_value = nonce_info["nonce"]
 
-    nonce_hash = Hash.from_string(nonce_value)
+    try:
+        nonce_hash = Hash.from_string(nonce_value)
+    except Exception as exc:
+        log_err(f"Invalid nonce value: {exc}")
+        return None
     advance_ix = advance_nonce_account(AdvanceNonceAccountParams(
         nonce_pubkey=nonce_pubkey,
         authorized_pubkey=payer_pubkey,
@@ -549,16 +697,15 @@ def create_nonce_account(
         return None
 
     try:
-        with open(payer_keypair_path) as f:
-            payer = Keypair.from_bytes(bytes(json.load(f)))
+        payer = _load_private_keypair(payer_keypair_path)
     except Exception as exc:
         log_err(f"Failed to load payer keypair: {exc}")
         return None
 
+    generated_nonce_path = None
     if nonce_keypair_path:
         try:
-            with open(nonce_keypair_path) as f:
-                nonce_kp = Keypair.from_bytes(bytes(json.load(f)))
+            nonce_kp = _load_private_keypair(nonce_keypair_path)
             log_info(f"Using existing nonce keypair: {nonce_kp.pubkey()}")
         except Exception as exc:
             log_err(f"Failed to load nonce keypair: {exc}")
@@ -566,72 +713,98 @@ def create_nonce_account(
     else:
         nonce_kp  = Keypair()
         save_path = f"nonce_{str(nonce_kp.pubkey())[:8]}.json"
-        with open(save_path, "w") as f:
-            json.dump(list(bytes(nonce_kp)), f)
+        try:
+            _save_private_keypair(save_path, nonce_kp)
+        except OSError as exc:
+            log_err(f"Failed to save nonce keypair: {exc}")
+            return None
+        generated_nonce_path = save_path
         log_ok(f"Generated nonce keypair → {save_path}")
 
-    payer_pubkey     = payer.pubkey()
-    nonce_pubkey     = nonce_kp.pubkey()
-    authority_pubkey = Pubkey.from_string(authority_address) if authority_address else payer_pubkey
+    submitted = False
+    try:
+        payer_pubkey     = payer.pubkey()
+        nonce_pubkey     = nonce_kp.pubkey()
+        try:
+            authority_pubkey = Pubkey.from_string(authority_address) if authority_address else payer_pubkey
+        except ValueError as exc:
+            log_err(f"Invalid authority address: {exc}")
+            return None
 
-    log_info(f"Payer:         {payer_pubkey}")
-    log_info(f"Nonce account: {nonce_pubkey}")
-    log_info(f"Authority:     {authority_pubkey}")
+        log_info(f"Payer:         {payer_pubkey}")
+        log_info(f"Nonce account: {nonce_pubkey}")
+        log_info(f"Authority:     {authority_pubkey}")
 
-    from rpc import rpc_call, get_recent_blockhash, _extract_result
+        from rpc import rpc_call, get_recent_blockhash, _extract_result
 
-    log_info("Fetching minimum balance for rent exemption...")
-    resp = rpc_call("getMinimumBalanceForRentExemption", [NONCE_ACCOUNT_LENGTH])
-    if resp is None:
-        log_err("No response from beacon"); return None
-    if "error" in resp:
-        log_err(f"RPC error: {resp['error']}"); return None
-    rent_lamports = _extract_result(resp)
-    if not isinstance(rent_lamports, int):
-        log_err(f"Unexpected getMinimumBalanceForRentExemption response: {rent_lamports}")
-        return None
-    log_info(f"Rent-exempt minimum: {rent_lamports:,} lamports ({rent_lamports / 1e9:.9f} SOL)")
+        log_info("Fetching minimum balance for rent exemption...")
+        resp = rpc_call("getMinimumBalanceForRentExemption", [NONCE_ACCOUNT_LENGTH])
+        if resp is None:
+            log_err("No response from beacon"); return None
+        if "error" in resp:
+            log_err(f"RPC error: {resp['error']}"); return None
+        rent_lamports = _extract_result(resp)
+        if not _validate_u64(rent_lamports, "Rent lamports"):
+            log_err(f"Unexpected getMinimumBalanceForRentExemption response: {rent_lamports}")
+            return None
+        log_info(f"Rent-exempt minimum: {rent_lamports:,} lamports ({rent_lamports / 1e9:.9f} SOL)")
 
-    blockhash = get_recent_blockhash()
-    if blockhash is None:
-        log_err("Could not fetch blockhash")
-        return None
+        blockhash = get_recent_blockhash()
+        if blockhash is None:
+            log_err("Could not fetch blockhash")
+            return None
 
-    create_ix = create_account(CreateAccountParams(
-        from_pubkey=payer_pubkey,
-        to_pubkey=nonce_pubkey,
-        lamports=rent_lamports,
-        space=NONCE_ACCOUNT_LENGTH,
-        owner=Pubkey.from_string("11111111111111111111111111111111"),
-    ))
-    init_ix = initialize_nonce_account(InitializeNonceAccountParams(
-        nonce_pubkey=nonce_pubkey,
-        authority=authority_pubkey,
-    ))
+        create_ix = create_account(CreateAccountParams(
+            from_pubkey=payer_pubkey,
+            to_pubkey=nonce_pubkey,
+            lamports=rent_lamports,
+            space=NONCE_ACCOUNT_LENGTH,
+            owner=Pubkey.from_string("11111111111111111111111111111111"),
+        ))
+        init_ix = initialize_nonce_account(InitializeNonceAccountParams(
+            nonce_pubkey=nonce_pubkey,
+            authority=authority_pubkey,
+        ))
 
-    bh  = Hash.from_string(blockhash)
-    msg = Message.new_with_blockhash([create_ix, init_ix], payer_pubkey, bh)
-    tx  = Transaction.new_unsigned(msg)
-    tx.sign([payer, nonce_kp], bh)
+        try:
+            bh = Hash.from_string(blockhash)
+        except Exception as exc:
+            log_err(f"Invalid blockhash: {exc}")
+            return None
+        msg = Message.new_with_blockhash([create_ix, init_ix], payer_pubkey, bh)
+        tx  = Transaction.new_unsigned(msg)
+        tx.sign([payer, nonce_kp], bh)
 
-    tx_b64 = base64.b64encode(bytes(tx)).decode("utf-8")
-    resp   = rpc_call("sendTransaction", [tx_b64, {"encoding": "base64"}])
-    if resp is None:
-        log_err("No response from beacon for sendTransaction")
-        return None
-    if "error" in resp:
-        log_err(f"Transaction rejected: {resp['error'].get('message', resp['error'])}")
-        return None
+        tx_b64 = base64.b64encode(bytes(tx)).decode("utf-8")
+        submitted = True
+        resp = rpc_call("sendTransaction", [tx_b64, {"encoding": "base64"}])
+        if resp is None:
+            log_err("No response from beacon for sendTransaction")
+            return None
+        if "error" in resp:
+            log_err(f"Transaction rejected: {rpc_error_message(resp['error'])}")
+            return None
 
-    sig = resp.get("result", "?")
-    print(f"\n  {GREEN}{BOLD}Nonce account created!{RESET}")
-    print(f"  Nonce account pubkey: {BOLD}{nonce_pubkey}{RESET}")
-    print(f"  Authority:            {authority_pubkey}")
-    print(f"  Funded:               {rent_lamports:,} lamports")
-    print(f"  Signature:            {sig}")
-    print(f"\n  {DIM}Fetch the nonce value:      get-nonce {nonce_pubkey}{RESET}")
-    print(f"  {DIM}Sign with nonce:  sign-nonce-tx <payer> {nonce_pubkey} <auth> <to> <lamports>{RESET}\n")
-    return str(nonce_pubkey)
+        sig = resp.get("result")
+        if not isinstance(sig, str) or not sig:
+            log_err(f"Unexpected sendTransaction response: {resp}")
+            return None
+        print(f"\n  {GREEN}{BOLD}Nonce account created!{RESET}")
+        print(f"  Nonce account pubkey: {BOLD}{nonce_pubkey}{RESET}")
+        print(f"  Authority:            {authority_pubkey}")
+        print(f"  Funded:               {rent_lamports:,} lamports")
+        print(f"  Signature:            {terminal_safe_text(sig)}")
+        print(f"\n  {DIM}Fetch the nonce value:      get-nonce {nonce_pubkey}{RESET}")
+        print(f"  {DIM}Sign with nonce:  sign-nonce-tx <payer> {nonce_pubkey} <auth> <to> <lamports>{RESET}\n")
+        return str(nonce_pubkey)
+    finally:
+        if generated_nonce_path is not None and not submitted:
+            try:
+                os.unlink(generated_nonce_path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                log_warn(f"Could not remove unused generated nonce keypair: {exc}")
 
 
 def offline_sign_nonce_transfer(
@@ -653,25 +826,29 @@ def offline_sign_nonce_transfer(
     if not HAS_SOLDERS:
         log_err("Offline signing requires: pip install solders")
         return None
+    if not _validate_u64(lamports, "Lamports"):
+        return None
 
     try:
-        with open(payer_keypair_path) as f:
-            payer = Keypair.from_bytes(bytes(json.load(f)))
+        payer = _load_private_keypair(payer_keypair_path)
     except Exception as exc:
         log_err(f"Failed to load payer keypair: {exc}")
         return None
 
     try:
-        with open(authority_keypair_path) as f:
-            authority_kp = Keypair.from_bytes(bytes(json.load(f)))
+        authority_kp = _load_private_keypair(authority_keypair_path)
     except Exception as exc:
         log_err(f"Failed to load authority keypair: {exc}")
         return None
 
     payer_pubkey     = payer.pubkey()
     authority_pubkey = authority_kp.pubkey()
-    nonce_pubkey     = Pubkey.from_string(nonce_account_str)
-    to_pubkey        = Pubkey.from_string(to_address)
+    try:
+        nonce_pubkey = Pubkey.from_string(nonce_account_str)
+        to_pubkey = Pubkey.from_string(to_address)
+    except ValueError as exc:
+        log_err(f"Invalid address: {exc}")
+        return None
 
     if nonce_value is None:
         log_info("Fetching current nonce value from chain...")
@@ -698,7 +875,11 @@ def offline_sign_nonce_transfer(
         lamports=lamports,
     ))
 
-    nonce_hash = Hash.from_string(nonce_value)
+    try:
+        nonce_hash = Hash.from_string(nonce_value)
+    except Exception as exc:
+        log_err(f"Invalid nonce value: {exc}")
+        return None
     msg = Message.new_with_blockhash([advance_ix, transfer_ix], payer_pubkey, nonce_hash)
     tx  = Transaction.new_unsigned(msg)
 

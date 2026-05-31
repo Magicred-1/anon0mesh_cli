@@ -1,11 +1,22 @@
 #!/usr/bin/env node
 import * as anchor from "@coral-xyz/anchor";
 import { PublicKey, Keypair, Transaction, TransactionInstruction, SystemProgram } from "@solana/web3.js";
-import { readFileSync } from "node:fs";
+import { readPrivateTextFileSync } from "./private_file.mjs";
 
 const PROGRAM_ID = new PublicKey("7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks");
 const ARCIUM_PROGRAM_ID = new PublicKey("Arcj82pX7HxYKLR92qvgZUAd7vGS1k4hQvAFcPATFdEQ");
 const INIT_PAYMENT_STATS_COMP_DEF_IX = Buffer.from([96, 78, 230, 203, 169, 42, 127, 99]);
+const MAX_RENDERED_LOG_LINES = 100;
+const MAX_RENDERED_LOG_LENGTH = 4096;
+
+function terminalSafeText(value) {
+  const text = String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, char =>
+    `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`
+  );
+  return text.length > MAX_RENDERED_LOG_LENGTH
+    ? `${text.slice(0, MAX_RENDERED_LOG_LENGTH)}... [truncated]`
+    : text;
+}
 
 const keyPath = process.env.ARCIUM_PAYER_KEYPAIR || process.env.ANCHOR_WALLET;
 if (!keyPath) {
@@ -13,7 +24,7 @@ if (!keyPath) {
   process.exit(1);
 }
 
-const secret = Uint8Array.from(JSON.parse(readFileSync(keyPath, "utf8")));
+const secret = Uint8Array.from(JSON.parse(readPrivateTextFileSync(keyPath)));
 const wallet = new anchor.Wallet(Keypair.fromSecretKey(secret));
 const rpcUrl = process.env.ARCIUM_RPC_URL || "https://api.devnet.solana.com";
 const connection = new anchor.web3.Connection(rpcUrl, "confirmed");
@@ -23,8 +34,12 @@ const mxeAccount = arcium.getMXEAccAddress(PROGRAM_ID);
 const compDefOffsetBuf = arcium.getCompDefAccOffset("payment_stats");
 const compDefOffset = Buffer.from(compDefOffsetBuf).readUInt32LE(0);
 const compDefAccount = arcium.getCompDefAccAddress(PROGRAM_ID, compDefOffset);
-const clusterOffsetRaw = Number.parseInt(process.env.ARCIUM_CLUSTER_OFFSET ?? "456", 10);
-const clusterOffset = Number.isNaN(clusterOffsetRaw) ? 456 : clusterOffsetRaw;
+const clusterOffsetText = process.env.ARCIUM_CLUSTER_OFFSET ?? "456";
+if (!/^\d+$/.test(clusterOffsetText) || Number(clusterOffsetText) > 0xFFFFFFFF) {
+  console.error("ARCIUM_CLUSTER_OFFSET must be an unsigned 32-bit integer");
+  process.exit(1);
+}
+const clusterOffset = Number(clusterOffsetText);
 const mempoolAccount = arcium.getMempoolAccAddress(clusterOffset);
 const executingPool = arcium.getExecutingPoolAccAddress(clusterOffset);
 const clusterAccount = arcium.getClusterAccAddress(clusterOffset);
@@ -36,7 +51,13 @@ console.log("clusterOffset:", clusterOffset);
 console.log("mxeAccount:", mxeAccount.toBase58());
 console.log("compDefAccount:", compDefAccount.toBase58());
 
-const existing = await connection.getAccountInfo(compDefAccount, "confirmed");
+let existing;
+try {
+  existing = await connection.getAccountInfo(compDefAccount, "confirmed");
+} catch {
+  console.error("Unable to query compDefAccount: RPC request failed");
+  process.exit(1);
+}
 if (existing) {
   console.log("compDefAccount already initialized; nothing to do.");
   process.exit(0);
@@ -73,7 +94,13 @@ try {
   const logs = err?.transactionLogs || err?.logs;
   if (Array.isArray(logs)) {
     console.error("Simulation logs:");
-    for (const line of logs) console.error("  ", line);
+    for (const line of logs.slice(0, MAX_RENDERED_LOG_LINES)) {
+      console.error("  ", terminalSafeText(line));
+    }
+    if (logs.length > MAX_RENDERED_LOG_LINES) {
+      console.error(`  ... ${logs.length - MAX_RENDERED_LOG_LINES} more lines omitted`);
+    }
   }
-  throw err;
+  console.error("init_payment_stats_comp_def failed:", err?.name || "request failed");
+  process.exitCode = 1;
 }

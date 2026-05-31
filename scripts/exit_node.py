@@ -13,9 +13,8 @@ and as the internet-facing half of a two-node LoRa deployment.
 Usage:
   python scripts/exit_node.py                        # devnet, default config
   python scripts/exit_node.py --network mainnet      # mainnet-beta
-  python scripts/exit_node.py --rpc https://my.node  # custom RPC
+  ANONMESH_RPC_URL=https://my.node python scripts/exit_node.py  # custom RPC
   python scripts/exit_node.py --config /path/to/conf # custom Reticulum config dir
-  python scripts/exit_node.py --port 4343            # TCP listener for relay nodes
 """
 from __future__ import annotations
 
@@ -39,8 +38,10 @@ except ImportError:
 
 from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
-    SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT,
-    decode_json, build_response, compress_response,
+    SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT, MAX_MESH_REQUEST_BYTES, MAX_MESH_RESPONSE_BYTES,
+    ResponseSizeLimitError, decode_json, decode_rpc_response, build_response, compress_response,
+    read_limited_http_body, redact_url, rpc_error_message,
+    positive_int, read_private_file, restrict_private_file_permissions, save_private_identity,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
     BOLD, CYAN, GREEN, RESET, DIM,
 )
@@ -91,6 +92,9 @@ def forward_rpc(raw_request: bytes) -> tuple[bytes, str, float]:
     except Exception as exc:
         return build_response(error=f"Invalid JSON: {exc}"), "?", 0.0
 
+    if not isinstance(req, dict):
+        return build_response(error="Invalid JSON-RPC payload: expected object"), "?", 0.0
+
     method = req.get("method", "?")
     req_id = req.get("id", 1)
 
@@ -107,21 +111,37 @@ def forward_rpc(raw_request: bytes) -> tuple[bytes, str, float]:
             json=req,
             timeout=20,
             headers={"Content-Type": "application/json"},
+            stream=True,
         )
-        http_resp.raise_for_status()
-        result_bytes = http_resp.content
+        try:
+            http_resp.raise_for_status()
+            try:
+                result_bytes = read_limited_http_body(http_resp, MAX_MESH_RESPONSE_BYTES)
+            except ResponseSizeLimitError:
+                log_err(f"[#{count}] ← {method}  response exceeds mesh size limit")
+                return (
+                    build_response(error="Solana RPC response exceeds mesh size limit", req_id=req_id),
+                    method,
+                    (time.monotonic() - t0) * 1000,
+                )
+        finally:
+            http_resp.close()
         rtt_ms = (time.monotonic() - t0) * 1000
 
-        # Log result summary
         try:
-            parsed = http_resp.json()
-            if "result" in parsed:
-                log_ok(f"[#{count}] ← {method}  {len(result_bytes)}B  {rtt_ms:.0f}ms")
-            elif "error" in parsed:
-                err_msg = parsed["error"].get("message", "?")
-                log_warn(f"[#{count}] ← {method}  error: {err_msg}  {rtt_ms:.0f}ms")
-        except Exception:
+            parsed = decode_rpc_response(result_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            log_err(f"[#{count}] ← {method}  invalid JSON-RPC response  {rtt_ms:.0f}ms")
+            return (
+                build_response(error="Solana RPC returned invalid JSON-RPC response", req_id=req_id),
+                method,
+                rtt_ms,
+            )
+        if "result" in parsed:
             log_ok(f"[#{count}] ← {method}  {len(result_bytes)}B  {rtt_ms:.0f}ms")
+        else:
+            err_msg = rpc_error_message(parsed["error"])
+            log_warn(f"[#{count}] ← {method}  error: {err_msg}  {rtt_ms:.0f}ms")
 
         return result_bytes, method, rtt_ms
 
@@ -131,12 +151,22 @@ def forward_rpc(raw_request: bytes) -> tuple[bytes, str, float]:
         return build_response(error="Solana RPC timeout", req_id=req_id), method, rtt_ms
     except requests.exceptions.ConnectionError as exc:
         rtt_ms = (time.monotonic() - t0) * 1000
-        log_err(f"[#{count}] ← {method}  connection error: {exc}")
-        return build_response(error=f"Connection error: {exc}", req_id=req_id), method, rtt_ms
+        log_err(
+            f"[#{count}] ← {method}  connection error: {type(exc).__name__} "
+            f"contacting {redact_url(rpc_endpoint)}"
+        )
+        return build_response(error="Solana RPC connection error", req_id=req_id), method, rtt_ms
+    except requests.exceptions.RequestException as exc:
+        rtt_ms = (time.monotonic() - t0) * 1000
+        log_err(
+            f"[#{count}] ← {method}  request error: {type(exc).__name__} "
+            f"contacting {redact_url(rpc_endpoint)}"
+        )
+        return build_response(error="Solana RPC request failed", req_id=req_id), method, rtt_ms
     except Exception as exc:
         rtt_ms = (time.monotonic() - t0) * 1000
-        log_err(f"[#{count}] ← {method}  error: {exc}")
-        return build_response(error=str(exc), req_id=req_id), method, rtt_ms
+        log_err(f"[#{count}] ← {method}  forwarding error: {type(exc).__name__}")
+        return build_response(error="Solana RPC forwarding failed", req_id=req_id), method, rtt_ms
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -156,6 +186,8 @@ def rpc_request_handler(path, data, request_id, link_id, remote_identity, reques
     )
     data_bytes = bytes(data)
     log_info(f"Request from {remote}  size={len(data_bytes)}B")
+    if len(data_bytes) > MAX_MESH_REQUEST_BYTES:
+        return build_response(error="Mesh request exceeds size limit")
 
     raw_response, method, rtt_ms = forward_rpc(data_bytes)
     compressed = compress_response(raw_response)
@@ -233,15 +265,19 @@ def setup_exit_node(config_path: str | None, network: str, custom_rpc: str | Non
     global exit_identity, exit_destination, rpc_endpoint, start_time
 
     # ── RPC endpoint ──────────────────────────────────────────────────────────
+    custom_rpc = custom_rpc or os.getenv("ANONMESH_RPC_URL")
     if custom_rpc:
         rpc_endpoint = custom_rpc
-    elif network in SOLANA_ENDPOINTS:
+    elif SOLANA_ENDPOINTS.get(network):
         rpc_endpoint = SOLANA_ENDPOINTS[network]
+    elif network == "custom":
+        log_err("Custom network requires --rpc or ANONMESH_RPC_URL")
+        sys.exit(1)
     else:
         log_err(f"Unknown network: {network}")
         sys.exit(1)
 
-    log_info(f"Solana RPC: {rpc_endpoint}")
+    log_info(f"Solana RPC: {redact_url(rpc_endpoint)}")
 
     # ── Reticulum ─────────────────────────────────────────────────────────────
     RNS.Reticulum(config_path)
@@ -255,13 +291,17 @@ def setup_exit_node(config_path: str | None, network: str, custom_rpc: str | Non
 
     # ── Identity (persisted) ──────────────────────────────────────────────────
     identity_dir = config_path or os.path.expanduser("~/.reticulum")
+    restrict_private_file_permissions(
+        os.path.join(identity_dir, "storage", "transport_identity"))
     identity_path = os.path.join(identity_dir, "anonmesh_exit_identity")
-    if os.path.isfile(identity_path):
-        exit_identity = RNS.Identity.from_file(identity_path)
+    if os.path.lexists(identity_path):
+        exit_identity = RNS.Identity.from_bytes(read_private_file(identity_path))
+        if exit_identity is None:
+            raise OSError("Could not load persisted exit node identity")
         log_info("Loaded persisted exit node identity")
     else:
         exit_identity = RNS.Identity()
-        exit_identity.to_file(identity_path)
+        save_private_identity(exit_identity, identity_path)
         log_ok("Generated new exit node identity (saved)")
 
     # ── Destination ───────────────────────────────────────────────────────────
@@ -288,7 +328,7 @@ def setup_exit_node(config_path: str | None, network: str, custom_rpc: str | Non
     print(f"{BOLD}{CYAN}┌─ EXIT NODE READY ──────────────────────────────────────────┐{RESET}")
     print(f"{BOLD}{CYAN}│{RESET}  Destination hash:  {GREEN}{BOLD}{dest_hash}{RESET}")
     print(f"{BOLD}{CYAN}│{RESET}  Network:           {network}")
-    print(f"{BOLD}{CYAN}│{RESET}  RPC endpoint:      {rpc_endpoint}")
+    print(f"{BOLD}{CYAN}│{RESET}  RPC endpoint:      {redact_url(rpc_endpoint)}")
     print(f"{BOLD}{CYAN}│{RESET}  Config:            {config_path or '~/.reticulum (default)'}")
     print(f"{BOLD}{CYAN}└────────────────────────────────────────────────────────────┘{RESET}")
     print()
@@ -314,8 +354,8 @@ def main():
                         choices=list(SOLANA_ENDPOINTS.keys()),
                         help="Solana network (default: devnet)")
     parser.add_argument("--rpc", default=None,
-                        help="Custom Solana RPC URL (overrides --network)")
-    parser.add_argument("--announce-interval", "-a", default=300, type=int,
+                        help="Custom RPC URL (prefer ANONMESH_RPC_URL for credentials)")
+    parser.add_argument("--announce-interval", "-a", default=300, type=positive_int,
                         metavar="SECONDS", help="Re-announce interval (default: 300s)")
     args = parser.parse_args()
 

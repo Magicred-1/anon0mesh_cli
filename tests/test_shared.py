@@ -3,6 +3,13 @@ tests/test_shared.py — unit tests for shared.py
 """
 
 import json
+import os
+import stat
+import zlib
+from pathlib import Path
+
+import pytest
+
 import shared
 
 
@@ -52,6 +59,12 @@ def test_build_response_error():
     assert "result" not in payload
 
 
+def test_build_response_empty_error_is_still_error():
+    payload = json.loads(shared.build_response(error=""))
+    assert payload["error"]["message"] == ""
+    assert "result" not in payload
+
+
 def test_build_response_req_id():
     payload = json.loads(shared.build_response(result=1, req_id=99))
     assert payload["id"] == 99
@@ -71,6 +84,266 @@ def test_decode_json_roundtrip():
 def test_decode_json_nested():
     data = {"result": {"value": {"blockhash": "abc"}}}
     assert shared.decode_json(json.dumps(data).encode()) == data
+
+
+@pytest.mark.parametrize("response", [
+    b"not-json",
+    b"[]",
+    b"{}",
+    b'{"result": 1, "error": "bad"}',
+])
+def test_decode_rpc_response_rejects_malformed_response(response):
+    with pytest.raises((json.JSONDecodeError, ValueError)):
+        shared.decode_rpc_response(response)
+
+
+def test_decode_rpc_response_accepts_single_result():
+    assert shared.decode_rpc_response(b'{"result": 42}') == {"result": 42}
+
+
+# ── redact_url ────────────────────────────────────────────────────────────────
+
+def test_redact_url_hides_query_credentials_and_path_tokens():
+    url = "https://user:pass@rpc.example.test/private-token?api-key=secret#fragment"
+    assert shared.redact_url(url) == "https://rpc.example.test/..."
+
+
+def test_redact_url_preserves_safe_host_and_port():
+    assert shared.redact_url("https://rpc.example.test:8899") == "https://rpc.example.test:8899"
+
+
+def test_redact_url_formats_ipv6_host():
+    assert shared.redact_url("http://[::1]:8899/token") == "http://[::1]:8899/..."
+
+
+def test_redact_url_rejects_non_url_values():
+    assert shared.redact_url("not-a-url") == "<redacted-rpc-url>"
+
+
+def test_redact_url_rejects_none():
+    assert shared.redact_url(None) == "<redacted-rpc-url>"
+
+
+def test_redact_urls_hides_embedded_credentials_and_path_tokens():
+    text = "request to https://user:pass@rpc.example.test/private?api-key=secret failed"
+    assert shared.redact_urls(text) == "request to https://rpc.example.test/... failed"
+
+
+# ── rpc_error_message ─────────────────────────────────────────────────────────
+
+def test_rpc_error_message_extracts_object_message():
+    assert shared.rpc_error_message({"message": "busy"}) == "busy"
+
+
+def test_rpc_error_message_accepts_scalar_error():
+    assert shared.rpc_error_message("busy") == "busy"
+
+
+def test_terminal_safe_text_escapes_control_bytes():
+    assert shared.terminal_safe_text("before\x1b[2J\nafter") == r"before\x1b[2J\x0aafter"
+
+
+def test_terminal_safe_text_truncates_long_values():
+    assert shared.terminal_safe_text("x" * 10, max_length=4) == "xxxx... [truncated]"
+
+
+# ── numeric parsing ───────────────────────────────────────────────────────────
+
+def test_positive_int_accepts_positive_value():
+    assert shared.positive_int("15") == 15
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "not-a-number"])
+def test_positive_int_rejects_non_positive_or_invalid_value(value):
+    with pytest.raises(ValueError):
+        shared.positive_int(value)
+
+
+@pytest.mark.parametrize("value", [0, (1 << 64) - 1])
+def test_is_u64_accepts_bounds(value):
+    assert shared.is_u64(value)
+
+
+@pytest.mark.parametrize("value", [-1, 1 << 64, True, 1.0, "1"])
+def test_is_u64_rejects_out_of_range_or_non_integer_values(value):
+    assert not shared.is_u64(value)
+
+
+# ── private local files ───────────────────────────────────────────────────────
+
+def test_restrict_private_file_permissions_repairs_existing_file(tmp_path):
+    path = tmp_path / "identity"
+    path.write_text("secret")
+    path.chmod(0o666)
+    shared.restrict_private_file_permissions(str(path))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_restrict_private_file_permissions_ignores_symlink_without_chmod_target(tmp_path):
+    target = tmp_path / "target"
+    target.write_text("secret")
+    target.chmod(0o666)
+    path = tmp_path / "identity"
+    path.symlink_to(target)
+
+    assert not shared.restrict_private_file_permissions(path)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o666
+
+
+def test_read_private_file_refuses_fifo(tmp_path):
+    path = tmp_path / "identity"
+    os.mkfifo(path)
+
+    with pytest.raises(OSError, match="Refusing non-regular private file"):
+        shared.read_private_file(path)
+
+
+def test_read_private_file_rejects_oversized_file(tmp_path):
+    path = tmp_path / "identity"
+    path.write_bytes(b"x" * 5)
+
+    with pytest.raises(OSError, match="Private file exceeds 4 byte limit"):
+        shared.read_private_file(path, max_bytes=4)
+
+
+def test_save_private_identity_uses_owner_only_permissions(tmp_path):
+    path = tmp_path / "identity"
+
+    class FakeIdentity:
+        def to_file(self, output_path):
+            Path(output_path).write_text("secret")
+
+    shared.save_private_identity(FakeIdentity(), str(path))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_save_private_identity_replaces_symlink_without_touching_target(tmp_path):
+    target = tmp_path / "keep.txt"
+    target.write_text("keep")
+    path = tmp_path / "identity"
+    path.symlink_to(target)
+
+    class FakeIdentity:
+        def to_file(self, output_path):
+            Path(output_path).write_text("secret")
+
+    shared.save_private_identity(FakeIdentity(), str(path))
+
+    assert not path.is_symlink()
+    assert path.read_text() == "secret"
+    assert target.read_text() == "keep"
+
+
+def test_save_private_identity_cleans_up_failed_temporary_file(tmp_path):
+    path = tmp_path / "identity"
+
+    class FailedIdentity:
+        def to_file(self, output_path):
+            return False
+
+    with pytest.raises(OSError, match="Could not save RNS identity"):
+        shared.save_private_identity(FailedIdentity(), str(path))
+
+    assert not path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_load_dotenv_private_repairs_permissions_and_preserves_existing_env(
+    tmp_path, monkeypatch,
+):
+    path = tmp_path / ".env"
+    path.write_text("NEW_TEST_VALUE=loaded\nEXISTING_TEST_VALUE=from-file\n")
+    path.chmod(0o666)
+    monkeypatch.delenv("NEW_TEST_VALUE", raising=False)
+    monkeypatch.setenv("EXISTING_TEST_VALUE", "from-process")
+
+    shared.load_dotenv_private(path)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert os.environ["NEW_TEST_VALUE"] == "loaded"
+    assert os.environ["EXISTING_TEST_VALUE"] == "from-process"
+
+
+def test_load_dotenv_private_skips_invalid_entries(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    path.write_text("=empty-key\nINVALID-NAME=value\nNUL_VALUE=bad\x00value\nVALID_NAME=loaded\n")
+    monkeypatch.delenv("VALID_NAME", raising=False)
+
+    shared.load_dotenv_private(path)
+
+    assert os.environ["VALID_NAME"] == "loaded"
+    assert "INVALID-NAME" not in os.environ
+    assert "NUL_VALUE" not in os.environ
+
+
+def test_load_dotenv_private_skips_symlink_without_chmod_target(tmp_path, monkeypatch, capsys):
+    target = tmp_path / "target.env"
+    target.write_text("SYMLINKED_TEST_VALUE=loaded\n")
+    target.chmod(0o666)
+    path = tmp_path / ".env"
+    path.symlink_to(target)
+    monkeypatch.delenv("SYMLINKED_TEST_VALUE", raising=False)
+
+    shared.load_dotenv_private(path)
+
+    assert "SYMLINKED_TEST_VALUE" not in os.environ
+    assert stat.S_IMODE(target.stat().st_mode) == 0o666
+    assert "Could not load private env file" in capsys.readouterr().out
+
+
+# ── response compression ──────────────────────────────────────────────────────
+
+def test_read_limited_http_body_assembles_streamed_chunks():
+    class Response:
+        def iter_content(self, chunk_size):
+            assert chunk_size == 64 * 1024
+            return iter([b"first", b"", b"-second"])
+
+    assert shared.read_limited_http_body(Response(), 12) == b"first-second"
+
+
+def test_read_limited_http_body_stops_at_size_limit():
+    consumed = []
+
+    class Response:
+        def iter_content(self, chunk_size):
+            for chunk in (b"1234", b"5", b"must-not-read"):
+                consumed.append(chunk)
+                yield chunk
+
+    with pytest.raises(shared.ResponseSizeLimitError, match="4 byte limit"):
+        shared.read_limited_http_body(Response(), 4)
+
+    assert consumed == [b"1234", b"5"]
+
+
+def test_compressed_response_roundtrip():
+    raw = b"repeated payload " * 100
+    assert shared.decompress_response(shared.compress_response(raw)) == raw
+
+
+def test_decompress_response_rejects_expansion_over_limit():
+    raw = b"x" * (shared.MAX_MESH_RESPONSE_BYTES + 1)
+    compressed = shared._COMPRESS_MAGIC + zlib.compress(raw)
+    with pytest.raises(ValueError, match="expanded size limit"):
+        shared.decompress_response(compressed)
+
+
+def test_decompress_response_rejects_oversized_uncompressed_payload():
+    with pytest.raises(ValueError, match="Response exceeds size limit"):
+        shared.decompress_response(b"x" * (shared.MAX_MESH_RESPONSE_BYTES + 1))
+
+
+def test_decompress_response_rejects_truncated_compressed_payload():
+    compressed = shared._COMPRESS_MAGIC + zlib.compress(b"payload" * 100)
+    with pytest.raises(ValueError, match="malformed"):
+        shared.decompress_response(compressed[:-1])
+
+
+def test_decompress_response_rejects_trailing_compressed_payload():
+    compressed = shared._COMPRESS_MAGIC + zlib.compress(b"payload") + b"trailing"
+    with pytest.raises(ValueError, match="malformed"):
+        shared.decompress_response(compressed)
 
 
 # ── quiet mode ─────────────────────────────────────────────────────────────────
@@ -137,3 +410,10 @@ def test_log_err_contains_cross(capsys):
 def test_log_warn_contains_warning_symbol(capsys):
     shared.log_warn("watch out")
     assert "⚠" in capsys.readouterr().out
+
+
+def test_log_warn_escapes_terminal_control_bytes(capsys):
+    shared.log_warn("before\x1b[2Jafter")
+    output = capsys.readouterr().out
+    assert r"before\x1b[2Jafter" in output
+    assert "\x1b[2J" not in output

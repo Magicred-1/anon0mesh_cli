@@ -38,6 +38,10 @@ def test_extract_result_value_none():
     assert rpc._extract_result({"result": {"value": None}}) is None
 
 
+def test_extract_result_non_object_response():
+    assert rpc._extract_result(["not", "an", "object"]) is None
+
+
 # ── get_balance ────────────────────────────────────────────────────────────────
 
 def test_get_balance_value_dict(mock_pool, capsys):
@@ -70,10 +74,42 @@ def test_get_balance_error(mock_pool, capsys):
     assert "invalid base58" in capsys.readouterr().out
 
 
+def test_get_balance_scalar_error(mock_pool, capsys):
+    mock_pool.call.return_value = {"error": "busy"}
+    rpc.get_balance("bad")
+    assert "busy" in capsys.readouterr().out
+
+
 def test_get_balance_none_response(mock_pool, capsys):
     mock_pool.call.return_value = None
     rpc.get_balance("addr1")  # must not raise
     capsys.readouterr()
+
+
+def test_get_balance_malformed_result(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": "not-lamports"}
+    rpc.get_balance("addr1")
+    assert "Unexpected getBalance response" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("lamports", [-1, 1 << 64])
+def test_get_balance_rejects_out_of_range_lamports(mock_pool, capsys, lamports):
+    mock_pool.call.return_value = {"result": lamports}
+    rpc.get_balance("addr1")
+    assert "Unexpected getBalance response" in capsys.readouterr().out
+
+
+# ── confidential_get_balance ──────────────────────────────────────────────────
+
+def test_confidential_balance_fails_closed_without_relaying_address(monkeypatch, mock_pool, capsys):
+    plain_balance = MagicMock()
+    monkeypatch.setattr(rpc, "get_balance", plain_balance)
+
+    rpc.confidential_get_balance("private-address")
+
+    mock_pool.call.assert_not_called()
+    plain_balance.assert_not_called()
+    assert "no MPC query handler is implemented" in capsys.readouterr().out
 
 
 # ── get_slot ───────────────────────────────────────────────────────────────────
@@ -96,6 +132,12 @@ def test_get_slot_error(mock_pool, capsys):
     assert "RPC error" in capsys.readouterr().out
 
 
+def test_get_slot_malformed_result(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": "not-a-slot"}
+    rpc.get_slot()
+    assert "Unexpected response" in capsys.readouterr().out
+
+
 # ── get_block_height ──────────────────────────────────────────────────────────
 
 def test_get_block_height_ok(mock_pool, capsys):
@@ -110,6 +152,12 @@ def test_get_block_height_none(mock_pool, capsys):
     assert "No response" in capsys.readouterr().out
 
 
+def test_get_block_height_malformed_result(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": "not-a-height"}
+    rpc.get_block_height()
+    assert "Unexpected response" in capsys.readouterr().out
+
+
 # ── get_transaction_count ─────────────────────────────────────────────────────
 
 def test_get_transaction_count_ok(mock_pool, capsys):
@@ -122,6 +170,20 @@ def test_get_transaction_count_none(mock_pool, capsys):
     mock_pool.call.return_value = None
     rpc.get_transaction_count()
     assert "No response" in capsys.readouterr().out
+
+
+def test_get_transaction_count_malformed_result(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": "not-a-count"}
+    rpc.get_transaction_count()
+    assert "Unexpected response" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("query", [rpc.get_slot, rpc.get_block_height, rpc.get_transaction_count])
+@pytest.mark.parametrize("value", [-1, 1 << 64])
+def test_chain_counters_reject_out_of_range_values(mock_pool, capsys, query, value):
+    mock_pool.call.return_value = {"result": value}
+    query()
+    assert "Unexpected response" in capsys.readouterr().out
 
 
 # ── get_recent_blockhash ──────────────────────────────────────────────────────
@@ -144,6 +206,61 @@ def test_get_recent_blockhash_error(mock_pool):
     assert rpc.get_recent_blockhash() is None
 
 
+def test_get_recent_blockhash_rejects_non_string(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": {"value": {"blockhash": ["not", "a", "string"]}}}
+    assert rpc.get_recent_blockhash() is None
+    assert "Unexpected response" in capsys.readouterr().out
+
+
+# ── wallet detail formatting ──────────────────────────────────────────────────
+
+def test_print_sol_balance_malformed_result(capsys):
+    rpc._print_sol_balance({"result": {"value": "not-lamports"}})
+    assert "Unexpected getBalance response" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("lamports", [-1, 1 << 64])
+def test_print_sol_balance_rejects_out_of_range_lamports(capsys, lamports):
+    rpc._print_sol_balance({"result": {"value": lamports}})
+    assert "Unexpected getBalance response" in capsys.readouterr().out
+
+
+def test_print_spl_tokens_malformed_result(capsys):
+    rpc._print_spl_tokens({"result": {"value": "not-a-list"}})
+    assert "Unexpected getTokenAccountsByOwner response" in capsys.readouterr().out
+
+
+def test_print_spl_tokens_malformed_nested_account(capsys):
+    rpc._print_spl_tokens({"result": {"value": [{"account": {"data": {"parsed": {"info": []}}}}]}})
+    assert "could not parse account" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("decimals", [-1, 256])
+def test_print_spl_tokens_rejects_out_of_range_decimals(capsys, decimals):
+    rpc._print_spl_tokens({"result": {"value": [{"account": {"data": {"parsed": {"info": {
+        "mint": "mint",
+        "tokenAmount": {"decimals": decimals, "uiAmountString": "1"},
+    }}}}}]}})
+    assert "could not parse account" in capsys.readouterr().out
+
+
+def test_print_spl_tokens_caps_rendered_accounts(capsys):
+    account = {"account": {"data": {"parsed": {"info": {
+        "mint": "mint",
+        "tokenAmount": {"decimals": 0, "uiAmountString": "1"},
+    }}}}}
+    rpc._print_spl_tokens({"result": {"value": [account] * 101}})
+    output = capsys.readouterr().out
+    assert output.count(" mint ") == 100
+    assert "1 more accounts omitted" in output
+
+
+def test_get_token_accounts_handles_query_exception(mock_pool, capsys):
+    mock_pool.call.side_effect = RuntimeError("query failed")
+    rpc.get_token_accounts("owner")
+    assert "Wallet detail query failed" in capsys.readouterr().out
+
+
 # ── get_beacon_pubkey ─────────────────────────────────────────────────────────
 
 def test_get_beacon_pubkey_ok(mock_pool):
@@ -162,6 +279,18 @@ def test_get_beacon_pubkey_error(mock_pool, capsys):
     assert "not configured" in capsys.readouterr().out
 
 
+def test_get_beacon_pubkey_scalar_error(mock_pool, capsys):
+    mock_pool.call.return_value = {"error": "busy"}
+    assert rpc.get_beacon_pubkey() is None
+    assert "busy" in capsys.readouterr().out
+
+
+def test_get_beacon_pubkey_rejects_non_string(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": {"not": "a pubkey"}}
+    assert rpc.get_beacon_pubkey() is None
+    assert "Unexpected getBeaconPubkey response" in capsys.readouterr().out
+
+
 # ── cosign_and_send ───────────────────────────────────────────────────────────
 
 def test_cosign_and_send_success(mock_pool, capsys):
@@ -177,9 +306,21 @@ def test_cosign_and_send_error(mock_pool, capsys):
     assert "co-sign rejected" in capsys.readouterr().out
 
 
+def test_cosign_and_send_scalar_error(mock_pool, capsys):
+    mock_pool.call.return_value = {"error": "busy"}
+    assert rpc.cosign_and_send("tx_b64") is None
+    assert "busy" in capsys.readouterr().out
+
+
 def test_cosign_and_send_none_response(mock_pool):
     mock_pool.call.return_value = None
     assert rpc.cosign_and_send("tx_b64") is None
+
+
+def test_cosign_and_send_rejects_non_string_signature(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": {"not": "a signature"}}
+    assert rpc.cosign_and_send("tx_b64") is None
+    assert "Unexpected cosignTransaction response" in capsys.readouterr().out
 
 
 def test_cosign_and_send_arcium_meta_forwarded(mock_pool):
@@ -210,10 +351,22 @@ def test_send_transaction_error(mock_pool, capsys):
     assert "blockhash expired" in capsys.readouterr().out
 
 
+def test_send_transaction_scalar_error(mock_pool, capsys):
+    mock_pool.call.return_value = {"error": "busy"}
+    rpc.send_transaction("b64tx")
+    assert "busy" in capsys.readouterr().out
+
+
 def test_send_transaction_none(mock_pool, capsys):
     mock_pool.call.return_value = None
     rpc.send_transaction("b64tx")  # must not raise
     capsys.readouterr()
+
+
+def test_send_transaction_rejects_non_string_signature(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": ["not", "a signature"]}
+    rpc.send_transaction("b64tx")
+    assert "Unexpected sendTransaction response" in capsys.readouterr().out
 
 
 # ── simulate_transaction ──────────────────────────────────────────────────────
@@ -232,6 +385,51 @@ def test_simulate_transaction_error(mock_pool, capsys):
     }
     rpc.simulate_transaction("b64tx")
     assert "Simulation error" in capsys.readouterr().out
+
+
+def test_simulate_transaction_malformed_result(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": {"value": "not-an-object"}}
+    rpc.simulate_transaction("b64tx")
+    assert "Unexpected simulateTransaction response" in capsys.readouterr().out
+
+
+def test_simulate_transaction_malformed_logs(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": {"value": {"err": None, "logs": "not-a-list"}}}
+    rpc.simulate_transaction("b64tx")
+    assert "Unexpected simulateTransaction logs" in capsys.readouterr().out
+
+
+def test_simulate_transaction_rpc_error(mock_pool, capsys):
+    mock_pool.call.return_value = {"error": "busy"}
+    rpc.simulate_transaction("b64tx")
+    assert "Simulation rejected: busy" in capsys.readouterr().out
+
+
+def test_simulate_transaction_rejects_non_string_log(mock_pool, capsys):
+    mock_pool.call.return_value = {"result": {"value": {"err": None, "logs": [{"bad": "log"}]}}}
+    rpc.simulate_transaction("b64tx")
+    assert "Unexpected simulateTransaction logs" in capsys.readouterr().out
+
+
+def test_simulate_transaction_escapes_terminal_control_bytes(mock_pool, capsys):
+    mock_pool.call.return_value = {
+        "result": {"value": {"err": None, "logs": ["before\x1b[2Jafter"]}}
+    }
+    rpc.simulate_transaction("b64tx")
+    output = capsys.readouterr().out
+    assert r"before\x1b[2Jafter" in output
+    assert "\x1b[2J" not in output
+
+
+def test_simulate_transaction_caps_rendered_logs(mock_pool, capsys):
+    mock_pool.call.return_value = {
+        "result": {"value": {"err": None, "logs": [f"log-{index}" for index in range(101)]}}
+    }
+    rpc.simulate_transaction("b64tx")
+    output = capsys.readouterr().out
+    assert "log-99" in output
+    assert "log-100" not in output
+    assert "1 simulation log lines omitted" in output
 
 
 # ── get_nonce_account ─────────────────────────────────────────────────────────
@@ -283,3 +481,24 @@ def test_get_nonce_account_none_response(mock_pool, capsys):
 def test_get_nonce_account_rpc_error(mock_pool, capsys):
     mock_pool.call.return_value = {"error": "connection refused"}
     assert rpc.get_nonce_account("NONCE_PUBKEY") is None
+
+
+def test_get_nonce_account_rejects_non_string_fields(mock_pool, capsys):
+    mock_pool.call.return_value = {
+        "result": {"value": {"data": {"parsed": {
+            "type": "initialized",
+            "info": {"blockhash": ["not", "a", "string"], "authority": "AUTHORITY"},
+        }}}}
+    }
+    assert rpc.get_nonce_account("NONCE_PUBKEY") is None
+    assert "nonce blockhash and authority must be strings" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("parsed, error", [
+    ([], "parsed nonce data must be an object"),
+    ({"type": "initialized", "info": []}, "nonce info must be an object"),
+])
+def test_get_nonce_account_rejects_non_object_fields(mock_pool, capsys, parsed, error):
+    mock_pool.call.return_value = {"result": {"value": {"data": {"parsed": parsed}}}}
+    assert rpc.get_nonce_account("NONCE_PUBKEY") is None
+    assert error in capsys.readouterr().out

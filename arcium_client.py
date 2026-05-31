@@ -39,6 +39,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+Pubkey = None
 try:
     from solders.keypair import Keypair
     from solders.pubkey  import Pubkey
@@ -48,7 +49,10 @@ try:
 except ImportError:
     HAS_SOLANA = False
 
-from shared import log_info, log_ok, log_warn, log_err
+from shared import (
+    load_dotenv_private, read_private_file,
+    log_info, log_ok, log_warn, log_err, redact_urls,
+)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 # declare_id! in programs/ble-revshare/src/lib.rs + Anchor.toml [programs.devnet]
@@ -63,6 +67,61 @@ CLUSTER_OFFSET_MAINNET = 2026
 POLL_INTERVAL          = 2.0
 POLL_TIMEOUT           = 120.0
 SHIM_PATH              = Path(__file__).parent / "rescue_shim.mjs"
+_MAX_U32               = (1 << 32) - 1
+_MAX_U64               = (1 << 64) - 1
+_MAX_U128              = (1 << 128) - 1
+_MAX_FIELD_VALUE       = (1 << 256) - 1
+_MAX_RESCUE_VALUES     = 100
+
+
+def _is_fixed_hex(value: object, byte_length: int) -> bool:
+    if not isinstance(value, str) or len(value) != byte_length * 2:
+        return False
+    try:
+        return len(bytes.fromhex(value)) == byte_length
+    except ValueError:
+        return False
+
+
+def _is_byte_array(value: object, byte_length: int) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == byte_length
+        and all(isinstance(item, int) and not isinstance(item, bool) and 0 <= item <= 255 for item in value)
+    )
+
+
+def _is_solana_pubkey(value: object) -> bool:
+    if Pubkey is None or not isinstance(value, str):
+        return False
+    try:
+        Pubkey.from_string(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _is_bounded_decimal(value: object, maximum: int) -> bool:
+    if (
+        not isinstance(value, str)
+        or not value.isascii()
+        or not value.isdecimal()
+        or len(value) > len(str(maximum))
+    ):
+        return False
+    return int(value) <= maximum
+
+
+def _is_field_value(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= _MAX_FIELD_VALUE
+
+
+def _are_ciphertexts(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and 0 < len(value) <= _MAX_RESCUE_VALUES
+        and all(_is_byte_array(ciphertext, 32) for ciphertext in value)
+    )
 
 
 # ── Shim helpers ───────────────────────────────────────────────────────────────
@@ -91,33 +150,81 @@ def _run_shim(*args: str, stdin_data: str | None = None, timeout: int = 60) -> d
         data = json.loads(result.stdout)
     except json.JSONDecodeError:
         raw = result.stderr.strip() or result.stdout.strip()
-        raise RuntimeError(f"shim non-JSON output (exit {result.returncode}): {raw[:300]}")
+        raise RuntimeError(f"shim non-JSON output (exit {result.returncode}): {redact_urls(raw[:300])}")
+    if not isinstance(data, dict):
+        raise RuntimeError(f"shim returned non-object JSON (exit {result.returncode})")
+    if result.returncode != 0:
+        error = data.get("error") or result.stderr.strip() or f"shim error (exit {result.returncode})"
+        raise RuntimeError(redact_urls(str(error)))
     if not data.get("ok"):
-        raise RuntimeError(data.get("error") or f"shim error (exit {result.returncode})")
+        error = data.get("error") or f"shim error (exit {result.returncode})"
+        raise RuntimeError(redact_urls(str(error)))
     return data
 
 
 def rescue_keygen() -> tuple[str, str]:
     data = _run_shim("keygen")
-    return data["privkey_hex"], data["pubkey_hex"]
+    private_key = data.get("privkey_hex")
+    public_key = data.get("pubkey_hex")
+    if not _is_fixed_hex(private_key, 32) or not _is_fixed_hex(public_key, 32):
+        raise ValueError("shim keygen returned invalid keys")
+    return private_key, public_key
 
 
 def rescue_encrypt(mxe_pubkey_hex: str, values: list[int], nonce_hex: str | None = None) -> dict:
-    args = ["encrypt", mxe_pubkey_hex, json.dumps(values)]
-    if nonce_hex:
+    if (
+        not _is_fixed_hex(mxe_pubkey_hex, 32)
+        or not isinstance(values, list)
+        or not 0 < len(values) <= _MAX_RESCUE_VALUES
+        or any(not _is_field_value(value) for value in values)
+        or (nonce_hex is not None and not _is_fixed_hex(nonce_hex, 16))
+    ):
+        raise ValueError("invalid encrypt request")
+    args = ["encrypt", mxe_pubkey_hex]
+    if nonce_hex is not None:
         args.append(nonce_hex)
-    return _run_shim(*args)
+    data = _run_shim(*args, stdin_data=json.dumps(values))
+    ciphertexts = data.get("ciphertexts")
+    if (
+        not isinstance(ciphertexts, list)
+        or len(ciphertexts) != len(values)
+        or any(not _is_byte_array(ciphertext, 32) for ciphertext in ciphertexts)
+        or not _is_fixed_hex(data.get("pubkey_hex"), 32)
+        or not _is_fixed_hex(data.get("nonce_hex"), 16)
+        or not _is_bounded_decimal(data.get("nonce_bn"), _MAX_U128)
+        or not _is_fixed_hex(data.get("shared_secret_hex"), 32)
+    ):
+        raise ValueError("shim encrypt returned invalid payload")
+    return data
 
 
 def rescue_decrypt(shared_secret_hex: str, ciphertexts: list[list[int]], nonce_hex: str) -> list[int]:
     # shared_secret_hex is sensitive — pass via stdin, not as a CLI arg
+    if (
+        not _is_fixed_hex(shared_secret_hex, 32)
+        or not _are_ciphertexts(ciphertexts)
+        or not _is_fixed_hex(nonce_hex, 16)
+    ):
+        raise ValueError("invalid decrypt request")
     data = _run_shim("decrypt", json.dumps(ciphertexts), nonce_hex, stdin_data=shared_secret_hex)
-    return [int(v) for v in data["values"]]
+    values = data.get("values")
+    if (
+        not isinstance(values, list)
+        or len(values) != len(ciphertexts)
+        or any(not _is_bounded_decimal(value, _MAX_FIELD_VALUE) for value in values)
+    ):
+        raise ValueError("shim decrypt returned invalid values")
+    return [int(value) for value in values]
 
 
 def rescue_shared_secret(privkey_hex: str, mxe_pubkey_hex: str) -> str:
     # privkey_hex is sensitive — pass via stdin, not as a CLI arg
-    return _run_shim("shared_secret", mxe_pubkey_hex, stdin_data=privkey_hex)["shared_secret_hex"]
+    if not _is_fixed_hex(privkey_hex, 32) or not _is_fixed_hex(mxe_pubkey_hex, 32):
+        raise ValueError("invalid shared_secret request")
+    shared_secret = _run_shim("shared_secret", mxe_pubkey_hex, stdin_data=privkey_hex).get("shared_secret_hex")
+    if not _is_fixed_hex(shared_secret, 32):
+        raise ValueError("shim shared_secret returned an invalid key")
+    return shared_secret
 
 
 # ── ArciumBeaconClient ─────────────────────────────────────────────────────────
@@ -146,6 +253,14 @@ class ArciumBeaconClient:
     ):
         if not HAS_SOLANA:
             raise ImportError("pip install solders solana")
+        if not isinstance(rpc_url, str) or not rpc_url:
+            raise ValueError("Arcium RPC URL must be a non-empty string")
+        if not _is_fixed_hex(mxe_pubkey_hex, 32):
+            raise ValueError("Arcium MXE public key must be 32 hexadecimal bytes")
+        if isinstance(cluster_offset, bool) or not isinstance(cluster_offset, int) or not 0 <= cluster_offset <= _MAX_U32:
+            raise ValueError(f"Arcium cluster offset must be between 0 and {_MAX_U32}")
+        if not _is_solana_pubkey(program_id):
+            raise ValueError("Arcium MXE program ID must be a Solana public key")
         self.rpc_url        = rpc_url
         self.payer          = payer_keypair
         self.mxe_pubkey_hex = mxe_pubkey_hex
@@ -187,6 +302,25 @@ class ArciumBeaconClient:
             broadcaster_token_account = os.getenv("ARCIUM_BROADCASTER_TOKEN_ACCOUNT") or None
         treasury_token_account = os.getenv("ARCIUM_TREASURY_TOKEN_ACCOUNT") or None
 
+        account_fields = (
+            payer_token_account,
+            recipient,
+            recipient_token_account,
+            mint,
+            broadcaster,
+        )
+        optional_account_fields = (broadcaster_token_account, treasury_token_account)
+        if (
+            isinstance(amount, bool)
+            or not isinstance(amount, int)
+            or not 0 <= amount <= _MAX_U64
+            or any(not _is_solana_pubkey(value) for value in account_fields)
+            or any(value is not None and not _is_solana_pubkey(value) for value in optional_account_fields)
+        ):
+            message = "invalid Arcium payment metadata"
+            log_err(message)
+            return {"status": "error", "message": message}
+
         # The shim handles encryption (x25519 + RescueCipher) using mxePubkeyHex directly.
         shim_args = json.dumps({
             "rpcUrl":                     self.rpc_url,
@@ -209,11 +343,15 @@ class ArciumBeaconClient:
             # shim_args contains payerKeypairHex — pass via stdin to keep it
             # out of the process argument list (/proc/<pid>/cmdline / ps aux)
             result = _run_shim("execute_payment", stdin_data=shim_args, timeout=60)
-            log_ok(f"Payment stats logged  sig={result['signature'][:20]}...")
-            return {"status": "ok", "signature": result["signature"]}
+            signature = result.get("signature")
+            if not isinstance(signature, str) or not signature:
+                raise ValueError("shim execute_payment returned an invalid signature")
+            log_ok(f"Payment stats logged  sig={signature[:20]}...")
+            return {"status": "ok", "signature": signature}
         except Exception as exc:
-            log_err(f"execute_payment failed: {exc}")
-            return {"status": "error", "message": str(exc)}
+            error = redact_urls(str(exc))
+            log_err(f"execute_payment failed: {error}")
+            return {"status": "error", "message": error}
 
     async def close(self):
         if self._client:
@@ -243,28 +381,42 @@ class ArciumBeacon:
 
     def __init__(self, client: ArciumBeaconClient | None):
         self._client = client
-        self._loop   = asyncio.new_event_loop()
-        self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
+        self._loop   = None
+        self._thread = None
         self.enabled = client is not None
         if self.enabled:
+            self._loop = asyncio.new_event_loop()
+            self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
             self._thread.start()
             fut = asyncio.run_coroutine_threadsafe(self._client.connect(), self._loop)
             try:
                 fut.result(timeout=15)
             except Exception as exc:
-                log_err(f"Arcium init failed: {exc}")
+                log_err(f"Arcium init failed: {redact_urls(str(exc))}")
                 self.enabled = False
+                self._cleanup_failed_init(fut)
+
+    def _cleanup_failed_init(self, connect_future) -> None:
+        """Bound cleanup after a failed or timed-out asynchronous connect."""
+        connect_future.cancel()
+        try:
+            close_future = asyncio.run_coroutine_threadsafe(self._client.close(), self._loop)
+            close_future.result(timeout=5)
+        except Exception as exc:
+            log_warn(f"Arcium cleanup failed: {redact_urls(str(exc))}")
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                log_warn("Arcium cleanup timed out while stopping event loop")
+            else:
+                self._loop.close()
 
     @classmethod
     def from_env(cls) -> "ArciumBeacon":
         # Auto-load .env
         env_file = Path(__file__).parent / ".env"
-        if env_file.exists():
-            for line in env_file.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    os.environ.setdefault(k.strip(), v.strip())
+        load_dotenv_private(env_file)
 
         if os.getenv("ARCIUM_ENABLED", "0") != "1":
             log_info("Arcium disabled (ARCIUM_ENABLED != 1)")
@@ -289,10 +441,11 @@ class ArciumBeacon:
 
         try:
             kp_path = os.path.expanduser(required["ARCIUM_PAYER_KEYPAIR"])
-            with open(kp_path) as f:
-                payer = Keypair.from_bytes(bytes(json.load(f)))
+            payer = Keypair.from_bytes(bytes(json.loads(read_private_file(kp_path))))
 
             cluster_offset = int(os.getenv("ARCIUM_CLUSTER_OFFSET", str(CLUSTER_OFFSET_DEVNET)))
+            if not 0 <= cluster_offset <= _MAX_U32:
+                raise ValueError(f"ARCIUM_CLUSTER_OFFSET must be between 0 and {_MAX_U32}")
             program_id     = os.getenv("ARCIUM_MXE_PROGRAM_ID", MXE_PROGRAM_ID)
 
             client = ArciumBeaconClient(
@@ -305,8 +458,8 @@ class ArciumBeacon:
             log_ok(f"Arcium client ready  program={program_id[:16]}...  cluster={cluster_offset}")
             return cls(client)
 
-        except (KeyError, FileNotFoundError) as exc:
-            log_err(f"Arcium env error: {exc}")
+        except Exception as exc:
+            log_err(f"Arcium env error: {redact_urls(str(exc))}")
             return cls(None)
 
     def log_payment_stats(
@@ -335,7 +488,7 @@ class ArciumBeacon:
             try:
                 return fut.result(timeout=POLL_TIMEOUT + 15)
             except Exception as exc:
-                log_err(f"Arcium log_payment_stats failed: {exc}")
+                log_err(f"Arcium log_payment_stats failed: {redact_urls(str(exc))}")
 
         # Run in background thread — don't block the RPC response to the client
         threading.Thread(target=_run, daemon=True).start()

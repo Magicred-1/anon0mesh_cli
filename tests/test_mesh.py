@@ -48,6 +48,7 @@ def _make_mock_identity():
 def _make_established_link(bl: BeaconLink):
     """Simulate a link being established on a BeaconLink."""
     mock_link = MagicMock()
+    bl._pending_link = mock_link
     bl._on_established(mock_link)
     return mock_link
 
@@ -128,6 +129,7 @@ class TestBeaconLinkLifecycle:
     def test_on_established_sets_active(self):
         bl = BeaconLink(VALID_HASH_HEX)
         mock_link = MagicMock()
+        bl._pending_link = mock_link
         _state.identify_self = False
         bl._on_established(mock_link)
 
@@ -141,12 +143,35 @@ class TestBeaconLinkLifecycle:
     def test_on_established_identifies_when_configured(self):
         bl = BeaconLink(VALID_HASH_HEX)
         mock_link = MagicMock()
+        bl._pending_link = mock_link
         fake_id = _make_mock_identity()
         _state.identify_self = True
         _state.client_identity = fake_id
         bl._on_established(mock_link)
 
         mock_link.identify.assert_called_once_with(fake_id)
+
+    def test_on_established_rejects_superseded_link(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        stale_link = MagicMock()
+        current_link = _make_established_link(bl)
+
+        bl._on_established(stale_link)
+
+        assert bl.active is True
+        assert bl.link is current_link
+        assert bl.ready.is_set()
+        stale_link.teardown.assert_called_once()
+
+    def test_on_established_duplicate_current_link_is_noop(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        current_link = _make_established_link(bl)
+
+        bl._on_established(current_link)
+
+        assert bl.active is True
+        assert bl.link is current_link
+        current_link.teardown.assert_not_called()
 
     def test_on_closed_clears_active_and_ready(self):
         bl = BeaconLink(VALID_HASH_HEX)
@@ -176,6 +201,20 @@ class TestBeaconLinkLifecycle:
             bl._on_closed(mock_link)
             mock_sched.assert_called_once()
 
+    def test_on_closed_ignores_replaced_link(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        stale_link = _make_established_link(bl)
+        current_link = _make_established_link(bl)
+        stale_link.teardown_reason = "timeout"
+
+        with patch.object(bl, "_schedule_reconnect") as mock_sched:
+            bl._on_closed(stale_link)
+
+        assert bl.active is True
+        assert bl.link is current_link
+        assert bl.ready.is_set()
+        mock_sched.assert_not_called()
+
     def test_teardown_sets_removed_and_tears_down_link(self):
         bl = BeaconLink(VALID_HASH_HEX)
         mock_link = _make_established_link(bl)
@@ -183,7 +222,20 @@ class TestBeaconLinkLifecycle:
 
         assert bl._removed is True
         assert bl.active is False
+        assert not bl.ready.is_set()
         mock_link.teardown.assert_called_once()
+
+    def test_teardown_cancels_pending_link(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        pending_link = MagicMock()
+        bl._pending_link = pending_link
+        bl.ready.set()
+
+        bl.teardown()
+
+        assert bl._pending_link is None
+        assert not bl.ready.is_set()
+        pending_link.teardown.assert_called_once()
 
     def test_teardown_tolerates_no_link(self):
         bl = BeaconLink(VALID_HASH_HEX)
@@ -250,16 +302,29 @@ class TestBeaconLinkConnect:
 
         assert result is False
 
+    def test_connect_after_removal_does_not_request_path(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        bl.teardown()
+
+        with patch.object(_mock_RNS.Transport, "has_path") as has_path:
+            result = bl.connect(timeout=0.3)
+
+        assert result is False
+        has_path.assert_not_called()
+
     def test_connect_link_establishment_timeout(self):
         bl = BeaconLink(VALID_HASH_HEX)
         _mock_RNS.Transport.has_path.return_value = True
         _mock_RNS.Identity.recall.return_value = _make_mock_identity()
         # Don't trigger the established callback → times out
-        _mock_RNS.Link.return_value = MagicMock()
+        mock_link_instance = MagicMock()
+        _mock_RNS.Link.return_value = mock_link_instance
 
         result = bl.connect(timeout=0.3)
 
         assert result is False
+        assert bl._pending_link is None
+        mock_link_instance.teardown.assert_called_once()
 
     def test_connect_with_identity_fast_path(self):
         bl = BeaconLink(VALID_HASH_HEX)
@@ -279,11 +344,52 @@ class TestBeaconLinkConnect:
 
     def test_connect_with_identity_timeout(self):
         bl = BeaconLink(VALID_HASH_HEX)
-        _mock_RNS.Link.return_value = MagicMock()
+        mock_link_instance = MagicMock()
+        _mock_RNS.Link.return_value = mock_link_instance
 
         result = bl.connect_with_identity(_make_mock_identity(), timeout=0.3)
 
         assert result is False
+        assert bl._pending_link is None
+        mock_link_instance.teardown.assert_called_once()
+
+    def test_connect_with_identity_after_removal_tears_down_attempt(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        mock_link_instance = MagicMock()
+        _mock_RNS.Link.return_value = mock_link_instance
+        bl.teardown()
+
+        result = bl.connect_with_identity(_make_mock_identity(), timeout=0.3)
+
+        assert result is False
+        assert bl._pending_link is None
+        mock_link_instance.teardown.assert_called_once()
+        mock_link_instance.set_link_established_callback.assert_not_called()
+
+    def test_start_link_attempt_tears_down_superseded_attempt(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        stale_link = MagicMock()
+        replacement_link = MagicMock()
+        bl._pending_link = stale_link
+        bl.ready.set()
+
+        assert bl._start_link_attempt(replacement_link) is True
+
+        assert bl._pending_link is replacement_link
+        assert not bl.ready.is_set()
+        stale_link.teardown.assert_called_once()
+
+    def test_start_link_attempt_preserves_link_that_already_won_race(self):
+        bl = BeaconLink(VALID_HASH_HEX)
+        current_link = _make_established_link(bl)
+        replacement_link = MagicMock()
+
+        assert bl._start_link_attempt(replacement_link) is False
+
+        assert bl.active is True
+        assert bl.link is current_link
+        assert bl.ready.is_set()
+        replacement_link.teardown.assert_called_once()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -394,6 +500,22 @@ class TestBeaconLinkRequest:
         assert not event.is_set()
         assert result_holder[0] is None
 
+    @pytest.mark.parametrize("payload", ["result", ["result"]])
+    def test_request_response_ignores_non_object_rpc_shape(self, payload):
+        bl = BeaconLink(VALID_HASH_HEX)
+        mock_link = _make_established_link(bl)
+        result_holder = [None, None]
+        event = threading.Event()
+        bl.request(b"payload", event, result_holder, 5.0)
+
+        on_response = mock_link.request.call_args.kwargs["response_callback"]
+        receipt = MagicMock()
+        receipt.response = json.dumps(payload).encode()
+        on_response(receipt)
+
+        assert not event.is_set()
+        assert result_holder[0] is None
+
     def test_request_response_ignores_none_response(self):
         bl = BeaconLink(VALID_HASH_HEX)
         mock_link = _make_established_link(bl)
@@ -423,6 +545,46 @@ class TestBeaconLinkRequest:
         on_response(receipt)
 
         assert result_holder[0]["result"] == "first"
+
+    def test_request_slower_decode_cannot_overwrite_faster_response(self):
+        slow = BeaconLink(VALID_HASH_HEX, label="slow")
+        fast = BeaconLink(VALID_HASH_HEX_2, label="fast")
+        slow_link = _make_established_link(slow)
+        fast_link = _make_established_link(fast)
+        result_holder = [None, None]
+        result_lock = threading.Lock()
+        event = threading.Event()
+        slow.request(b"payload", event, result_holder, 5.0, result_lock)
+        fast.request(b"payload", event, result_holder, 5.0, result_lock)
+        slow_callback = slow_link.request.call_args.kwargs["response_callback"]
+        fast_callback = fast_link.request.call_args.kwargs["response_callback"]
+        slow_entered = threading.Event()
+        release_slow = threading.Event()
+        real_decode = mesh.decode_rpc_response
+
+        def delayed_decode(raw):
+            parsed = real_decode(raw)
+            if parsed["result"] == "slow":
+                slow_entered.set()
+                release_slow.wait(timeout=5)
+            return parsed
+
+        def receipt(result):
+            value = MagicMock()
+            value.response = json.dumps({"jsonrpc": "2.0", "id": 1, "result": result}).encode()
+            return value
+
+        with patch.object(mesh, "decode_rpc_response", side_effect=delayed_decode):
+            slow_thread = threading.Thread(target=slow_callback, args=(receipt("slow"),))
+            slow_thread.start()
+            assert slow_entered.wait(timeout=5)
+            fast_callback(receipt("fast"))
+            release_slow.set()
+            slow_thread.join(timeout=5)
+
+        assert not slow_thread.is_alive()
+        assert result_holder[0]["result"] == "fast"
+        assert result_holder[1] == "fast"
 
     def test_request_handles_send_error(self):
         bl = BeaconLink(VALID_HASH_HEX)
@@ -473,6 +635,12 @@ class TestBeaconPoolAddRemove:
     def test_add_invalid_hash_length(self):
         pool = BeaconPool()
         result = pool.add("abcd", connect=False)
+        assert result is False
+        assert pool.size() == 0
+
+    def test_add_invalid_hash_characters(self):
+        pool = BeaconPool()
+        result = pool.add("g" * len(VALID_HASH_HEX), connect=False)
         assert result is False
         assert pool.size() == 0
 
@@ -527,6 +695,16 @@ class TestBeaconPoolAddRemove:
         with patch.object(bl, "teardown") as mock_td:
             pool.remove(VALID_HASH_HEX)
             mock_td.assert_called_once()
+
+    def test_discard_if_current_preserves_replacement(self):
+        pool = BeaconPool()
+        stale_link = BeaconLink(VALID_HASH_HEX)
+        replacement_link = BeaconLink(VALID_HASH_HEX)
+        pool._links[VALID_HASH_HEX] = replacement_link
+
+        pool._discard_if_current(VALID_HASH_HEX, stale_link)
+
+        assert pool.all_links() == [replacement_link]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -593,7 +771,7 @@ class TestBeaconPoolDispatch:
 
         rpc_result = {"jsonrpc": "2.0", "id": 1, "result": 12345}
 
-        def fake_request(payload, event, holder, timeout):
+        def fake_request(payload, event, holder, timeout, result_lock):
             holder[0] = rpc_result
             holder[1] = "A"
             event.set()
@@ -609,7 +787,7 @@ class TestBeaconPoolDispatch:
         pool.add(VALID_HASH_HEX, connect=False)
         bl = pool.all_links()[0]
         _make_established_link(bl)
-        bl.request = lambda p, e, h, t: None  # never fires event
+        bl.request = lambda p, e, h, t, result_lock: None  # never fires event
 
         result = pool.call("getSlot")
         assert result is None
@@ -729,6 +907,11 @@ class TestBeaconPoolAddBackground:
         pool.add_background("short")
         assert pool.size() == 0
 
+    def test_add_background_invalid_hash_characters(self):
+        pool = BeaconPool()
+        pool.add_background("g" * len(VALID_HASH_HEX))
+        assert pool.size() == 0
+
     def test_add_background_duplicate_skipped(self):
         pool = BeaconPool()
         pool.add(VALID_HASH_HEX, connect=False)
@@ -787,13 +970,14 @@ class TestBeaconAnnounceHandler:
             handler.received_announce(VALID_HASH_BYTES, None, ANNOUNCE_DATA)
             mock_add.assert_not_called()
 
-    def test_already_known_beacon_skipped(self):
+    def test_already_known_beacon_forwarded_for_identity_refresh(self):
         pool = BeaconPool()
         pool.add(VALID_HASH_HEX, connect=False)
         handler = BeaconAnnounceHandler(pool)
         with patch.object(pool, "add_from_announce") as mock_add:
-            handler.received_announce(VALID_HASH_BYTES, _make_mock_identity(), ANNOUNCE_DATA)
-            mock_add.assert_not_called()
+            ident = _make_mock_identity()
+            handler.received_announce(VALID_HASH_BYTES, ident, ANNOUNCE_DATA)
+            mock_add.assert_called_once_with(VALID_HASH_BYTES, ident, label=f"disc:{VALID_HASH_HEX[:12]}...")
 
     def test_aspect_filter_is_none(self):
         assert BeaconAnnounceHandler.aspect_filter is None
@@ -811,6 +995,41 @@ class TestStartupHelpers:
         mesh.start_reticulum("/fake/config")
         _mock_RNS.Reticulum.assert_called_with("/fake/config")
         assert _state.client_identity is not None
+
+    def test_start_reticulum_repairs_transport_identity_after_wait(self):
+        delayed_identity = MagicMock()
+        _mock_RNS.Transport.identity = None
+        _mock_RNS.Identity.return_value = _make_mock_identity()
+
+        def establish_transport(_delay):
+            _mock_RNS.Transport.identity = delayed_identity
+
+        def assert_identity_ready(path):
+            assert _mock_RNS.Transport.identity is delayed_identity
+            assert path == "/fake/config/storage/transport_identity"
+
+        with (
+            patch.object(mesh.time, "sleep", side_effect=establish_transport),
+            patch.object(
+                mesh,
+                "restrict_private_file_permissions",
+                side_effect=assert_identity_ready,
+            ) as restrict,
+        ):
+            mesh.start_reticulum("/fake/config")
+
+        restrict.assert_called_once_with("/fake/config/storage/transport_identity")
+
+    def test_start_reticulum_warns_when_transport_identity_not_ready(self, capsys):
+        _mock_RNS.Transport.identity = None
+        _mock_RNS.Identity.return_value = _make_mock_identity()
+        with (
+            patch.object(mesh.time, "time", side_effect=[0.0, 6.0]),
+            patch.object(mesh, "restrict_private_file_permissions"),
+        ):
+            mesh.start_reticulum("/fake/config")
+
+        assert "Transport identity not ready after 5s" in capsys.readouterr().out
 
     def test_connect_all_parallel(self):
         _state.pool = BeaconPool()

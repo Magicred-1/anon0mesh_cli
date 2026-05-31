@@ -6,7 +6,7 @@
 #  Sets up everything needed to run beacon.py and client.py:
 #    · Python venv + all dependencies
 #    · Reticulum config with working public hubs
-#    · Meshtastic interface file (optional)
+#    · Meshtastic research dependency (optional; interface module supplied separately)
 #    · Launcher scripts  (run_beacon.sh / run_client.sh)
 #    · systemd service   (optional, beacon only)
 #
@@ -16,10 +16,11 @@
 #    ./setup.sh --beacon     # beacon-only, non-interactive
 #    ./setup.sh --client     # client-only, non-interactive
 #    ./setup.sh --both       # both, non-interactive
-#    ./setup.sh --systemd    # also install beacon as systemd service
+#    ./setup.sh --beacon --systemd  # also install beacon as systemd service
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
+umask 077
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 R="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"
@@ -41,6 +42,62 @@ ${BOLD}${CYAN}
 ${R}${DIM}              a n o n m e s h  ·  Mesh First, Chain When It Matters${R}
 ${BOLD}                              Setup Script  ·  Powered by Reticulum${R}
 "; }
+
+refuse_unsafe_output_path() {
+  local destination="$1"
+  if [[ -L "$destination" || ( -e "$destination" && ! -f "$destination" ) ]]; then
+    log_err "Refusing unsafe output path: $destination"
+    return 1
+  fi
+}
+
+atomic_private_write() {
+  local destination="$1"
+  local mode="$2"
+  local directory base temp
+  refuse_unsafe_output_path "$destination"
+  directory="$(dirname "$destination")"
+  base="$(basename "$destination")"
+  temp="$(mktemp "$directory/.${base}.tmp.XXXXXX")"
+  if ! cat > "$temp" || ! chmod "$mode" "$temp" || ! mv -f "$temp" "$destination"; then
+    rm -f "$temp"
+    return 1
+  fi
+}
+
+atomic_private_append() {
+  local destination="$1"
+  local mode="$2"
+  local directory base temp
+  refuse_unsafe_output_path "$destination"
+  if [[ ! -f "$destination" ]]; then
+    log_err "Cannot append to missing file: $destination"
+    return 1
+  fi
+  directory="$(dirname "$destination")"
+  base="$(basename "$destination")"
+  temp="$(mktemp "$directory/.${base}.tmp.XXXXXX")"
+  if ! cat "$destination" > "$temp" || ! cat >> "$temp" \
+      || ! chmod "$mode" "$temp" || ! mv -f "$temp" "$destination"; then
+    rm -f "$temp"
+    return 1
+  fi
+}
+
+systemd_escape_path() {
+  local value="$1"
+  if [[ "$value" =~ [[:cntrl:]] || "$value" == *\\* || "$value" == *\"* ]]; then
+    log_err "Cannot write systemd service for path containing control characters, quotes, or backslashes"
+    return 1
+  fi
+  value="${value// /\\x20}"
+  value="${value//%/%%}"
+  printf '%s' "$value"
+}
+
+config_value_is_safe() {
+  [[ ! "$1" =~ [[:cntrl:]] ]]
+}
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,7 +145,13 @@ for arg in "$@"; do
     --wallet-setup) SETUP_WALLET=true ;;
     --help|-h)
       echo "Usage: $0 [--beacon] [--client] [--both] [--systemd] [--ble] [--rnode] [--meshtastic] [--mainnet|--devnet] [--wallet-setup]"
+      echo "For unattended --rnode setup, set ANONMESH_RNODE_PORT and ANONMESH_RNODE_REGION=us|eu."
+      echo "--systemd requires --beacon or --both; --wallet-setup requires --client or --both."
       exit 0 ;;
+    *)
+      log_err "Unknown option: $arg"
+      echo "Run $0 --help for usage."
+      exit 1 ;;
   esac
 done
 
@@ -116,7 +179,7 @@ if [[ "$NONINTERACTIVE" == false ]]; then
   [[ "$net_choice" == "2" ]] && SOLANA_NETWORK="mainnet"
 
   echo ""
-  read -rp "Install BLE (Bluetooth) support? [y/N]: " ble_choice
+  read -rp "Install experimental desktop BLE research deps? [y/N]: " ble_choice
   [[ "$ble_choice" =~ ^[Yy]$ ]] && INSTALL_BLE=true
 
   echo ""
@@ -140,11 +203,21 @@ if [[ "$NONINTERACTIVE" == false ]]; then
   fi
 fi
 
+if [[ "$INSTALL_SYSTEMD" == true && "$INSTALL_BEACON" != true ]]; then
+  log_err "--systemd requires --beacon or --both"
+  exit 1
+fi
+
+if [[ "$SETUP_WALLET" == true && "$INSTALL_CLIENT" != true ]]; then
+  log_err "--wallet-setup requires --client or --both"
+  exit 1
+fi
+
 log_ok "Configuration:"
 log_info "  Beacon:     $INSTALL_BEACON"
 log_info "  Client:     $INSTALL_CLIENT"
 log_info "  Network:    $SOLANA_NETWORK"
-log_info "  BLE:        $INSTALL_BLE"
+log_info "  BLE deps:   $INSTALL_BLE (experimental; no desktop relay configured)"
 log_info "  RNode LoRa: $INSTALL_RNODE"
 log_info "  Meshtastic: $INSTALL_MESHTASTIC"
 log_info "  systemd:    $INSTALL_SYSTEMD"
@@ -173,7 +246,7 @@ if [[ "$OS_TYPE" == "macos" ]]; then
   fi
 
   if [[ "$INSTALL_BLE" == true ]]; then
-    log_info "BLE: macOS has native CoreBluetooth — no extra system deps needed."
+    log_info "BLE research deps: macOS has native CoreBluetooth."
   fi
 else
   # Linux — use apt-get
@@ -191,7 +264,7 @@ else
   fi
 
   if [[ "$INSTALL_BLE" == true ]]; then
-    log_info "Installing BLE system deps..."
+    log_info "Installing experimental BLE research system deps..."
     sudo apt-get install -y -qq bluetooth bluez libbluetooth-dev || true
   fi
 fi
@@ -251,6 +324,7 @@ python -c "import LXMF" && log_ok "LXMF import OK" || log_warn "LXMF import fail
 
 if [[ "$INSTALL_BLE" == true ]]; then
   python -c "import bleak" && log_ok "bleak import OK" || log_warn "bleak import failed"
+  log_warn "Desktop BLE relay is experimental; bleak alone does not configure a working Reticulum interface"
 fi
 
 if [[ "$INSTALL_CLIENT" == true ]]; then
@@ -284,19 +358,18 @@ fi
 log_step "Reticulum config"
 
 mkdir -p "$RNS_CONFIG_DIR" "$INTERFACES_DIR"
+chmod 700 "$RNS_CONFIG_DIR" "$INTERFACES_DIR"
 
 BACKUP_DONE=false
+refuse_unsafe_output_path "$RNS_CONFIG_FILE"
 if [[ -f "$RNS_CONFIG_FILE" ]]; then
   BACKUP="$RNS_CONFIG_FILE.bak.$(date +%Y%m%d_%H%M%S)"
-  cp "$RNS_CONFIG_FILE" "$BACKUP"
+  atomic_private_write "$BACKUP" 600 < "$RNS_CONFIG_FILE"
   log_info "Backed up existing config → $BACKUP"
   BACKUP_DONE=true
 fi
 
-BLE_ENABLED="no"
-[[ "$INSTALL_BLE" == true ]] && BLE_ENABLED="yes"
-
-cat > "$RNS_CONFIG_FILE" << RNSCFG
+atomic_private_write "$RNS_CONFIG_FILE" 600 << RNSCFG
 [reticulum]
   enable_transport         = True
   share_instance           = Yes
@@ -325,32 +398,27 @@ cat > "$RNS_CONFIG_FILE" << RNSCFG
     target_host = dfw.us.g00n.cloud
     target_port = 6969
 
-  [[RNS Testnet BetweenTheBorders]]
-    type        = TCPClientInterface
-    enabled     = yes
-    target_host = reticulum.betweentheborders.com
-    target_port = 4242
 RNSCFG
 
 log_ok "Reticulum config written → $RNS_CONFIG_FILE"
 
 # ── Validate config ────────────────────────────────────────────────────────────
-python -c "
-import sys, re
-cfg = open('$RNS_CONFIG_FILE').read()
+ANONMESH_RNS_CONFIG_FILE="$RNS_CONFIG_FILE" python -c '
+import os, sys, re
+cfg = open(os.environ["ANONMESH_RNS_CONFIG_FILE"]).read()
 lines = cfg.splitlines()
-has_reticulum = any(l.strip() == '[reticulum]' for l in lines)
-has_interfaces = any(l.strip() == '[interfaces]' for l in lines)
+has_reticulum = any(l.strip() == "[reticulum]" for l in lines)
+has_interfaces = any(l.strip() == "[interfaces]" for l in lines)
 errors = []
 if not has_reticulum:
-    errors.append('Missing [reticulum] section')
+    errors.append("Missing [reticulum] section")
 if not has_interfaces:
-    errors.append('Missing [interfaces] section')
+    errors.append("Missing [interfaces] section")
 if errors:
-    for e in errors: print('ERROR:', e)
+    for e in errors: print("ERROR:", e)
     sys.exit(1)
-print('Config syntax looks OK')
-" && log_ok "Config validated" || { log_err "Config validation failed — check $RNS_CONFIG_FILE"; exit 1; }
+print("Config syntax looks OK")
+' && log_ok "Config validated" || { log_err "Config validation failed — check $RNS_CONFIG_FILE"; exit 1; }
 
 # ═════════════════════════════════════════════════════════════════════════════
 # STEP 4b — RNode LoRa interface (Heltec V3)
@@ -359,7 +427,7 @@ if [[ "$INSTALL_RNODE" == true ]]; then
   log_step "RNode LoRa interface (Heltec V3)"
 
   # ── Detect serial device ──────────────────────────────────────────────────
-  RNODE_PORT=""
+  RNODE_PORT="${ANONMESH_RNODE_PORT:-}"
   SERIAL_DEVICES=()
 
   if [[ "$OS_TYPE" == "macos" ]]; then
@@ -372,7 +440,14 @@ if [[ "$INSTALL_RNODE" == true ]]; then
     done < <(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || true)
   fi
 
-  if [[ ${#SERIAL_DEVICES[@]} -eq 0 ]]; then
+  if [[ -n "$RNODE_PORT" ]] && ! config_value_is_safe "$RNODE_PORT"; then
+    log_warn "Skipping RNode setup — serial port contains control characters."
+    RNODE_PORT=""
+  fi
+
+  if [[ -n "$RNODE_PORT" ]]; then
+    log_info "Using RNode serial device from ANONMESH_RNODE_PORT: $RNODE_PORT"
+  elif [[ ${#SERIAL_DEVICES[@]} -eq 0 ]]; then
     log_warn "No serial devices found."
     log_info "  Plug in the Heltec V3 and check:"
     if [[ "$OS_TYPE" == "macos" ]]; then
@@ -380,10 +455,14 @@ if [[ "$INSTALL_RNODE" == true ]]; then
     else
       log_info "    ls /dev/ttyUSB*"
     fi
-    echo ""
-    read -rp "  Enter serial port manually (or press Enter to skip): " manual_port
-    if [[ -n "$manual_port" ]]; then
-      RNODE_PORT="$manual_port"
+    if [[ "$NONINTERACTIVE" == true ]]; then
+      log_info "  Set ANONMESH_RNODE_PORT and ANONMESH_RNODE_REGION=us|eu for unattended setup."
+    else
+      echo ""
+      read -rp "  Enter serial port manually (or press Enter to skip): " manual_port
+      if [[ -n "$manual_port" ]]; then
+        RNODE_PORT="$manual_port"
+      fi
     fi
   elif [[ ${#SERIAL_DEVICES[@]} -eq 1 ]]; then
     RNODE_PORT="${SERIAL_DEVICES[0]}"
@@ -393,36 +472,59 @@ if [[ "$INSTALL_RNODE" == true ]]; then
     for i in "${!SERIAL_DEVICES[@]}"; do
       echo "  $((i+1))) ${SERIAL_DEVICES[$i]}"
     done
-    read -rp "  Select device [1-${#SERIAL_DEVICES[@]}]: " dev_choice
-    if [[ "$dev_choice" =~ ^[0-9]+$ ]] && (( dev_choice >= 1 && dev_choice <= ${#SERIAL_DEVICES[@]} )); then
-      RNODE_PORT="${SERIAL_DEVICES[$((dev_choice-1))]}"
+    if [[ "$NONINTERACTIVE" == true ]]; then
+      log_warn "Skipping RNode setup — set ANONMESH_RNODE_PORT to select one device."
     else
-      log_warn "Invalid choice — skipping RNode setup"
+      read -rp "  Select device [1-${#SERIAL_DEVICES[@]}]: " dev_choice
+      if [[ "$dev_choice" =~ ^[0-9]+$ ]] && (( dev_choice >= 1 && dev_choice <= ${#SERIAL_DEVICES[@]} )); then
+        RNODE_PORT="${SERIAL_DEVICES[$((dev_choice-1))]}"
+      else
+        log_warn "Invalid choice — skipping RNode setup"
+      fi
     fi
+  fi
+
+  if [[ -n "$RNODE_PORT" ]] && ! config_value_is_safe "$RNODE_PORT"; then
+    log_warn "Skipping RNode setup — serial port contains control characters."
+    RNODE_PORT=""
   fi
 
   if [[ -n "$RNODE_PORT" ]]; then
     # ── Frequency region ──────────────────────────────────────────────────
-    echo ""
-    echo -e "${BOLD}LoRa frequency region:${R}"
-    echo "  1) EU 868 MHz  (Europe, Africa, Middle East)"
-    echo "  2) US 915 MHz  (Americas, Australia)"
-    read -rp "Choice [1/2, default=1]: " freq_choice
-
-    if [[ "$freq_choice" == "2" ]]; then
-      RNODE_FREQ=915000000
-      RNODE_TXPOWER=22
-      RNODE_REGION="US 915 MHz"
-    else
-      RNODE_FREQ=867200000
-      RNODE_TXPOWER=14
-      RNODE_REGION="EU 868 MHz"
+    region_choice="${ANONMESH_RNODE_REGION:-}"
+    if [[ -z "$region_choice" && "$NONINTERACTIVE" == false ]]; then
+      echo ""
+      echo -e "${BOLD}LoRa frequency region:${R}"
+      echo "  1) EU 868 MHz  (Europe, Africa, Middle East)"
+      echo "  2) US 915 MHz  (Americas, Australia)"
+      read -rp "Choice [1/2, default=1]: " freq_choice
+      [[ "$freq_choice" == "2" ]] && region_choice="us" || region_choice="eu"
     fi
+
+    case "${region_choice,,}" in
+      us)
+        RNODE_FREQ=915000000
+        RNODE_TXPOWER=22
+        RNODE_REGION="US 915 MHz"
+        ;;
+      eu)
+        RNODE_FREQ=867200000
+        RNODE_TXPOWER=14
+        RNODE_REGION="EU 868 MHz"
+        ;;
+      *)
+        log_warn "Skipping RNode setup — set ANONMESH_RNODE_REGION=us|eu for the legal radio region."
+        RNODE_PORT=""
+        ;;
+    esac
+  fi
+
+  if [[ -n "$RNODE_PORT" ]]; then
 
     log_info "Configuring RNode: $RNODE_PORT @ $RNODE_REGION"
 
     # ── Append RNode interface to existing Reticulum config ───────────────
-    cat >> "$RNS_CONFIG_FILE" << RNODE
+    atomic_private_append "$RNS_CONFIG_FILE" 600 << RNODE
 
 # ── RNODE LORA (Heltec V3 / SX1262) ─────────────────────────────────────────
 # Region: ${RNODE_REGION}
@@ -459,7 +561,7 @@ RNODE
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
-# STEP 5 — Meshtastic interface file
+# STEP 5 — Meshtastic interface module status
 # ═════════════════════════════════════════════════════════════════════════════
 if [[ "$INSTALL_MESHTASTIC" == true ]]; then
   log_step "Meshtastic interface"
@@ -468,13 +570,9 @@ if [[ "$INSTALL_MESHTASTIC" == true ]]; then
   if [[ -f "$MESH_IFACE" ]]; then
     log_info "Meshtastic_Interface.py already present"
   else
-    log_info "Downloading Meshtastic_Interface.py from anon0mesh repo..."
-    if wget -q -O "$MESH_IFACE" \
-      "https://raw.githubusercontent.com/Magicred-1/anon0mesh/main/interfaces/Meshtastic_Interface.py"; then
-      log_ok "Meshtastic_Interface.py downloaded → $MESH_IFACE"
-    else
-      log_warn "Download failed — you can place it manually at $MESH_IFACE"
-    fi
+    log_warn "Meshtastic_Interface.py is not bundled; place a compatible module manually at:"
+    log_info "  $MESH_IFACE"
+    log_info "The Python meshtastic dependency is installed, but no Reticulum interface was configured."
   fi
 fi
 
@@ -484,33 +582,31 @@ fi
 log_step "Launcher scripts"
 
 if [[ "$INSTALL_BEACON" == true ]]; then
-  cat > "$SCRIPT_DIR/run_beacon.sh" << LAUNCHER
+  atomic_private_write "$SCRIPT_DIR/run_beacon.sh" 700 << LAUNCHER
 #!/usr/bin/env bash
 # anon0mesh Beacon launcher
-# Edit NETWORK and RPC_URL below to match your setup.
+# Set SOLANA_RPC_URL in the environment if you need a custom RPC endpoint.
 # ─────────────────────────────────────────────────────
 
+umask 077
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 source "\$SCRIPT_DIR/venv/bin/activate"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 NETWORK="${SOLANA_NETWORK}"          # devnet | mainnet | custom
-RPC_URL=""               # leave empty to use default public endpoint
-                         # or set e.g. https://my-node.helius-rpc.com/?api-key=XXX
 ANNOUNCE_INTERVAL=300    # seconds between re-announces after burst phase
 
 # ── Build args ─────────────────────────────────────────────────────────────
-ARGS="--network \$NETWORK --announce-interval \$ANNOUNCE_INTERVAL"
-[[ -n "\$RPC_URL" ]] && ARGS="\$ARGS --rpc \$RPC_URL"
+ARGS=(--network "\$NETWORK" --announce-interval "\$ANNOUNCE_INTERVAL")
 
-exec python "\$SCRIPT_DIR/beacon.py" \$ARGS "\$@"
+exec python "\$SCRIPT_DIR/beacon.py" "\${ARGS[@]}" "\$@"
 LAUNCHER
-  chmod +x "$SCRIPT_DIR/run_beacon.sh"
+  chmod 700 "$SCRIPT_DIR/run_beacon.sh"
   log_ok "run_beacon.sh created"
 fi
 
 if [[ "$INSTALL_CLIENT" == true ]]; then
-  cat > "$SCRIPT_DIR/run_client.sh" << LAUNCHER
+  atomic_private_write "$SCRIPT_DIR/run_client.sh" 700 << LAUNCHER
 #!/usr/bin/env bash
 # anon0mesh Client launcher
 # Pass beacon hashes as arguments, or use --discover for auto-discovery.
@@ -521,6 +617,7 @@ if [[ "$INSTALL_CLIENT" == true ]]; then
 #   ./run_client.sh <HASH1> --balance <ADDR>  # one-shot balance
 # ─────────────────────────────────────────────────────
 
+umask 077
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 source "\$SCRIPT_DIR/venv/bin/activate"
 
@@ -529,17 +626,13 @@ if [[ \$# -eq 0 ]]; then
   exec python "\$SCRIPT_DIR/client.py" --discover --strategy race
 fi
 
-# ── One or more hashes passed → use them + discover ───────────────────────
+# ── Leading bare hashes → explicit beacons; preserve all option values ────
 HASHES=()
-EXTRA_ARGS=()
-for arg in "\$@"; do
-  # If it looks like a hex hash (16+ hex chars), treat as beacon hash
-  if [[ "\$arg" =~ ^[0-9a-fA-F]{16,}$ ]]; then
-    HASHES+=("\$arg")
-  else
-    EXTRA_ARGS+=("\$arg")
-  fi
+while [[ \$# -gt 0 && "\$1" =~ ^[0-9a-fA-F]{16,}$ ]]; do
+  HASHES+=("\$1")
+  shift
 done
+EXTRA_ARGS=("\$@")
 
 CMD=(python "\$SCRIPT_DIR/client.py")
 [[ \${#HASHES[@]} -gt 0 ]] && CMD+=(--beacon "\${HASHES[@]}")
@@ -547,7 +640,7 @@ CMD+=(--discover --strategy race)   # always keep discovery on for new beacons
 
 exec "\${CMD[@]}" "\${EXTRA_ARGS[@]}"
 LAUNCHER
-  chmod +x "$SCRIPT_DIR/run_client.sh"
+  chmod 700 "$SCRIPT_DIR/run_client.sh"
   log_ok "run_client.sh created"
 fi
 
@@ -559,6 +652,8 @@ if [[ "$INSTALL_BEACON" == true && "$INSTALL_SYSTEMD" == true ]]; then
 
   SERVICE_FILE="/etc/systemd/system/anon0mesh-beacon.service"
   CURRENT_USER="$(whoami)"
+  SYSTEMD_WORKING_DIRECTORY="$(systemd_escape_path "$SCRIPT_DIR")"
+  SYSTEMD_EXEC_START="$(systemd_escape_path "$SCRIPT_DIR/run_beacon.sh")"
 
   sudo tee "$SERVICE_FILE" > /dev/null << SERVICE
 [Unit]
@@ -570,10 +665,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=${CURRENT_USER}
-WorkingDirectory=${SCRIPT_DIR}
-ExecStart=${SCRIPT_DIR}/run_beacon.sh
+WorkingDirectory=${SYSTEMD_WORKING_DIRECTORY}
+ExecStart=${SYSTEMD_EXEC_START}
 Restart=on-failure
 RestartSec=10
+UMask=0077
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=anon0mesh-beacon
@@ -598,33 +694,33 @@ fi
 # ═════════════════════════════════════════════════════════════════════════════
 log_step "Smoke test"
 
-python -c "
-import sys
-sys.path.insert(0, '$SCRIPT_DIR')
+ANONMESH_SCRIPT_DIR="$SCRIPT_DIR" python -c '
+import os, sys
+sys.path.insert(0, os.environ["ANONMESH_SCRIPT_DIR"])
 errors = []
 
 try:
     import RNS
 except ImportError:
-    errors.append('RNS not importable')
+    errors.append("RNS not importable")
 
 try:
     from shared import APP_NAME, APP_ASPECT, build_rpc, decode_json
-    import json; json.loads(build_rpc('getSlot'))
+    import json; json.loads(build_rpc("getSlot"))
 except Exception as e:
-    errors.append(f'shared: {e}')
+    errors.append(f"shared: {e}")
 
 try:
     import state
-    assert hasattr(state, 'pool')
-    assert hasattr(state, 'active_wallet')
+    assert hasattr(state, "pool")
+    assert hasattr(state, "active_wallet")
 except Exception as e:
-    errors.append(f'state: {e}')
+    errors.append(f"state: {e}")
 
 try:
     from mesh import BeaconPool, BeaconAnnounceHandler, BeaconLink
 except Exception as e:
-    errors.append(f'mesh: {e}')
+    errors.append(f"mesh: {e}")
 
 try:
     import rpc
@@ -633,7 +729,7 @@ try:
     assert callable(rpc.send_transaction)
     assert callable(rpc.get_nonce_account)
 except Exception as e:
-    errors.append(f'rpc: {e}')
+    errors.append(f"rpc: {e}")
 
 try:
     import wallet
@@ -641,21 +737,21 @@ try:
     assert callable(wallet.import_wallet)
     assert callable(wallet.create_nonce_account)
 except Exception as e:
-    errors.append(f'wallet: {e}')
+    errors.append(f"wallet: {e}")
 
 try:
     import menu
     assert callable(menu.repl)
 except Exception as e:
-    errors.append(f'menu: {e}')
+    errors.append(f"menu: {e}")
 
 if errors:
     for e in errors:
-        print('FAIL:', e)
+        print("FAIL:", e)
     sys.exit(1)
 else:
-    print('All modules OK')
-" && log_ok "Smoke test passed" || { log_err "Smoke test failed"; exit 1; }
+    print("All modules OK")
+' && log_ok "Smoke test passed" || { log_err "Smoke test failed"; exit 1; }
 
 # ═════════════════════════════════════════════════════════════════════════════
 # STEP 9 — Solana wallet + durable nonce account (client only, opt-in)
@@ -695,35 +791,81 @@ if [[ "$INSTALL_CLIENT" == true && "$SETUP_WALLET" == true ]]; then
       else
         WALLET_KEYPAIR_PATH="$SCRIPT_DIR/wallet.json"
         # Generate keypair via Python; pass path through env to avoid heredoc quoting issues
-        ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" python << 'PYEOF'
-import os, json
+        if ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" python << 'PYEOF'
+import os, json, stat, tempfile
 from solders.keypair import Keypair
+
+def save_keypair(path, kp):
+    try:
+        destination_mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        pass
+    else:
+        if stat.S_ISLNK(destination_mode):
+            raise OSError(f"Refusing symlinked keypair path: {path}")
+        if not stat.S_ISREG(destination_mode):
+            raise OSError(f"Refusing non-regular keypair path: {path}")
+    directory = os.path.dirname(path) or "."
+    previous_umask = os.umask(0o077)
+    temp_path = ""
+    fd = -1
+    try:
+        fd, temp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", dir=directory)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            fd = -1
+            json.dump(list(bytes(kp)), f)
+        os.replace(temp_path, path)
+        temp_path = ""
+    finally:
+        if fd != -1:
+            os.close(fd)
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+        os.umask(previous_umask)
+
 kp   = Keypair()
 path = os.environ["ANON0MESH_KP_PATH"]
-with open(path, "w") as f:
-    json.dump(list(bytes(kp)), f)
+save_keypair(path, kp)
 print(f"  Public key : {kp.pubkey()}")
 print(f"  Saved to   : {path}")
 PYEOF
-        if [[ $? -ne 0 ]]; then
-          log_err "Keypair generation failed"; WALLET_KEYPAIR_PATH=""
-        else
+        then
           log_ok "Keypair saved → $WALLET_KEYPAIR_PATH"
           log_warn "Keep wallet.json safe — it contains your private key!"
+        else
+          log_err "Keypair generation failed"; WALLET_KEYPAIR_PATH=""
         fi
       fi
     fi
 
     # ── Show public key + funding instructions ────────────────────────────────
     if [[ -n "$WALLET_KEYPAIR_PATH" ]]; then
-      WALLET_PUBKEY=$(ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" python << 'PYEOF'
-import os, json
+      if ! WALLET_PUBKEY=$(ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" python << 'PYEOF'
+import os, json, stat
 from solders.keypair import Keypair
-with open(os.environ["ANON0MESH_KP_PATH"]) as f:
+path = os.environ["ANON0MESH_KP_PATH"]
+if os.path.islink(path):
+    raise OSError(f"Refusing symlinked keypair path: {path}")
+flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+fd = os.open(path, flags)
+with os.fdopen(fd) as f:
+    if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+        raise OSError(f"Refusing non-regular keypair path: {path}")
+    os.fchmod(f.fileno(), 0o600)
     kp = Keypair.from_bytes(bytes(json.load(f)))
 print(kp.pubkey(), end="")
 PYEOF
-)
+      ); then
+        log_err "Could not load keypair: $WALLET_KEYPAIR_PATH — skipping wallet setup"
+        WALLET_KEYPAIR_PATH=""
+      fi
+    fi
+
+    if [[ -n "$WALLET_KEYPAIR_PATH" ]]; then
       log_ok "Wallet public key: $WALLET_PUBKEY"
       echo ""
       if [[ "$SOLANA_NETWORK" == "devnet" ]]; then
@@ -759,12 +901,12 @@ PYEOF
         # Run Python once.
         # Status/progress messages  → stderr  (shown directly to the user)
         # KEY=VALUE result lines    → stdout  (captured into _nonce_out)
-        _nonce_out=$(
+        if _nonce_out=$(
           ANON0MESH_KP_PATH="$WALLET_KEYPAIR_PATH" \
           ANON0MESH_RPC="$_SETUP_RPC" \
           ANON0MESH_DIR="$SCRIPT_DIR" \
           python << 'PYEOF'
-import os, sys, json, base64
+import os, sys, json, base64, stat, tempfile
 import requests
 from solders.keypair     import Keypair
 from solders.pubkey      import Pubkey
@@ -779,6 +921,8 @@ from solders.hash    import Hash
 RPC       = os.environ["ANON0MESH_RPC"]
 SAVE_DIR  = os.environ["ANON0MESH_DIR"]
 NONCE_LEN = 80  # fixed by the Solana runtime
+MAX_U64   = (1 << 64) - 1
+MAX_RPC_RESPONSE_BYTES = 1024 * 1024
 
 def rpc(method, params):
     r = requests.post(
@@ -786,30 +930,110 @@ def rpc(method, params):
         json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
         headers={"Content-Type": "application/json"},
         timeout=20,
+        stream=True,
     )
-    r.raise_for_status()
-    d = r.json()
+    try:
+        r.raise_for_status()
+        chunks = []
+        size = 0
+        for chunk in r.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            size += len(chunk)
+            if size > MAX_RPC_RESPONSE_BYTES:
+                raise RuntimeError(f"{method} response exceeds size limit")
+            chunks.append(chunk)
+        try:
+            d = json.loads(b"".join(chunks))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"{method} returned invalid JSON: {exc}") from exc
+    finally:
+        r.close()
+    if not isinstance(d, dict):
+        raise RuntimeError(f"{method} returned a non-object response")
     if "error" in d:
-        raise RuntimeError(d["error"].get("message", str(d["error"]))
-                           if isinstance(d["error"], dict) else str(d["error"]))
-    return d
+        error = d["error"]
+        raise RuntimeError(error.get("message", str(error))
+                           if isinstance(error, dict) else str(error))
+    if "result" not in d:
+        raise RuntimeError(f"{method} response is missing result")
+    return d["result"]
+
+def require_u64(value, label):
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_U64:
+        raise RuntimeError(f"{label} must be a u64 integer")
+    return value
+
+def require_string(value, label):
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(f"{label} must be a non-empty string")
+    return value
+
+def load_keypair(path):
+    if os.path.islink(path):
+        raise OSError(f"Refusing symlinked keypair path: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(path, flags)
+    with os.fdopen(fd) as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise OSError(f"Refusing non-regular keypair path: {path}")
+        os.fchmod(f.fileno(), 0o600)
+        return Keypair.from_bytes(bytes(json.load(f)))
+
+def save_keypair(path, kp):
+    try:
+        destination_mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        pass
+    else:
+        if stat.S_ISLNK(destination_mode):
+            raise OSError(f"Refusing symlinked keypair path: {path}")
+        if not stat.S_ISREG(destination_mode):
+            raise OSError(f"Refusing non-regular keypair path: {path}")
+    directory = os.path.dirname(path) or "."
+    previous_umask = os.umask(0o077)
+    temp_path = ""
+    fd = -1
+    try:
+        fd, temp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", dir=directory)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            fd = -1
+            json.dump(list(bytes(kp)), f)
+        os.replace(temp_path, path)
+        temp_path = ""
+    finally:
+        if fd != -1:
+            os.close(fd)
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+        os.umask(previous_umask)
+
+nonce_path = None
+submitted = False
 
 try:
-    with open(os.environ["ANON0MESH_KP_PATH"]) as f:
-        payer = Keypair.from_bytes(bytes(json.load(f)))
+    payer = load_keypair(os.environ["ANON0MESH_KP_PATH"])
 
     nonce_kp   = Keypair()
     nonce_path = os.path.join(SAVE_DIR, f"nonce_{str(nonce_kp.pubkey())[:8]}.json")
-    with open(nonce_path, "w") as f:
-        json.dump(list(bytes(nonce_kp)), f)
+    save_keypair(nonce_path, nonce_kp)
 
     payer_pub = payer.pubkey()
     nonce_pub = nonce_kp.pubkey()
     print(f"  Nonce keypair:  {nonce_pub}", file=sys.stderr)
 
-    rent      = rpc("getMinimumBalanceForRentExemption", [NONCE_LEN])["result"]
+    rent      = require_u64(rpc("getMinimumBalanceForRentExemption", [NONCE_LEN]), "rent")
     print(f"  Rent required:  {rent} lamports", file=sys.stderr)
-    blockhash = rpc("getLatestBlockhash", [])["result"]["value"]["blockhash"]
+    latest    = rpc("getLatestBlockhash", [])
+    try:
+        blockhash = latest["value"]["blockhash"]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError(f"getLatestBlockhash returned an unexpected result: {exc}") from exc
+    blockhash = require_string(blockhash, "blockhash")
 
     create_ix = create_account(CreateAccountParams(
         from_pubkey = payer_pub,
@@ -828,8 +1052,12 @@ try:
     tx.sign([payer, nonce_kp], bh)
 
     print("  Sending transaction...", file=sys.stderr)
-    sig = rpc("sendTransaction", [base64.b64encode(bytes(tx)).decode(),
-                                  {"encoding": "base64"}])["result"]
+    submitted = True
+    sig = require_string(
+        rpc("sendTransaction", [base64.b64encode(bytes(tx)).decode(),
+                                {"encoding": "base64"}]),
+        "signature",
+    )
 
     # KEY=VALUE to stdout — captured by the shell
     print(f"NONCE_PUBKEY={nonce_pub}")
@@ -839,15 +1067,21 @@ try:
 
 except Exception as exc:
     print(f"ERROR: {exc}", file=sys.stderr)
-    # Remove the saved keypair only if we generated it and the tx failed
-    try:
-        os.remove(nonce_path)
-    except Exception:
-        pass
+    if submitted:
+        print(f"WARNING: transaction submission status is unknown; preserving nonce keypair: {nonce_path}",
+              file=sys.stderr)
+    elif nonce_path is not None:
+        try:
+            os.remove(nonce_path)
+        except Exception:
+            pass
     sys.exit(1)
 PYEOF
-        )
-        _nonce_exit=$?
+        ); then
+          _nonce_exit=0
+        else
+          _nonce_exit=$?
+        fi
 
         if [[ $_nonce_exit -eq 0 ]]; then
           while IFS='=' read -r key val; do

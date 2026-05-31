@@ -1,6 +1,6 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 
-const prog = new PublicKey("7fvHNYVuZP6EYt68GLUa4kU8f8dCBSaGafL9aDhhtMZN");
+const prog = new PublicKey("7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks");
 
 async function check(url, name) {
     const c = new Connection(url);

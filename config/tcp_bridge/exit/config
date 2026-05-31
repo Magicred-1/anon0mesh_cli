@@ -1,0 +1,13 @@
+[reticulum]
+  enable_transport      = True
+  share_instance        = Yes
+  shared_instance_port  = 37432
+  instance_control_port = 37433
+
+[interfaces]
+
+  [[TCP Bridge Client]]
+    type        = TCPClientInterface
+    enabled     = yes
+    target_host = 127.0.0.1
+    target_port = 4243

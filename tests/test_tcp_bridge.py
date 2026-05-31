@@ -20,14 +20,15 @@ import json
 import signal
 import subprocess
 
-RELAY_CONFIG = os.path.join(os.path.dirname(__file__), "..", "..", "config", "relay")
-EXIT_CONFIG = os.path.join(os.path.dirname(__file__), "..", "..", "config", "exit")
-EXIT_NODE_SCRIPT = os.path.join(os.path.dirname(__file__), "exit_node.py")
 PROJECT_ROOT = os.path.join(os.path.dirname(__file__), "..")
+RELAY_CONFIG = os.path.join(PROJECT_ROOT, "config", "tcp_bridge", "relay")
+EXIT_CONFIG = os.path.join(PROJECT_ROOT, "config", "tcp_bridge", "exit")
+EXIT_NODE_SCRIPT = os.path.join(PROJECT_ROOT, "scripts", "exit_node.py")
+RNSD_EXECUTABLE = os.path.join(os.path.dirname(sys.executable), "rnsd")
 
 # Validate paths
 for path, label in [(RELAY_CONFIG, "relay config"), (EXIT_CONFIG, "exit config"),
-                     (EXIT_NODE_SCRIPT, "exit_node.py")]:
+                     (EXIT_NODE_SCRIPT, "exit_node.py"), (RNSD_EXECUTABLE, "rnsd")]:
     resolved = os.path.realpath(path)
     if not os.path.exists(resolved):
         print(f"FATAL: {label} not found at {resolved}")
@@ -56,6 +57,7 @@ def log_warn(msg): log("!", YELLOW, msg)
 
 
 def main():
+    os.umask(0o077)
     procs = []
 
     def cleanup():
@@ -84,7 +86,7 @@ def main():
     # ── Step 1: Start relay rnsd ──────────────────────────────────────────────
     log_info(f"Starting relay rnsd (config: {RELAY_CONFIG})")
     relay_proc = subprocess.Popen(
-        ["rnsd", "--config", RELAY_CONFIG],
+        [RNSD_EXECUTABLE, "--config", RELAY_CONFIG],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
     procs.append(relay_proc)
@@ -102,7 +104,7 @@ def main():
     # ── Step 2: Start exit rnsd ───────────────────────────────────────────────
     log_info(f"Starting exit rnsd (config: {EXIT_CONFIG})")
     exit_rnsd = subprocess.Popen(
-        ["rnsd", "--config", EXIT_CONFIG],
+        [RNSD_EXECUTABLE, "--config", EXIT_CONFIG],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
     procs.append(exit_rnsd)
@@ -146,13 +148,13 @@ def main():
     # announce, establishes a link through the TCP bridge, and sends an RPC request.
     client_code = f'''
 import sys, os, time, json
-sys.path.insert(0, "{os.path.realpath(PROJECT_ROOT)}")
+sys.path.insert(0, {os.path.realpath(PROJECT_ROOT)!r})
 import RNS
 from shared import APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA, build_rpc, decompress_response
 
 try:
     # Connect to relay instance
-    r = RNS.Reticulum("{RELAY_CONFIG}")
+    r = RNS.Reticulum({RELAY_CONFIG!r})
     time.sleep(2)
 
     print("CLIENT: Reticulum connected to relay instance")
@@ -265,7 +267,7 @@ except Exception as e:
             prefix = "CLIENT" if text.startswith("CLIENT:") else "      "
             if "SUCCESS" in text:
                 log_ok(text.replace("CLIENT: ", ""))
-            elif "FAIL" in text:
+            elif text.startswith("CLIENT: FAIL"):
                 log_err(text.replace("CLIENT: ", ""))
             else:
                 log_info(text.replace("CLIENT: ", ""))
