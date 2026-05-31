@@ -646,7 +646,11 @@ def create_nonce_account(
     else:
         nonce_kp  = Keypair()
         save_path = f"nonce_{str(nonce_kp.pubkey())[:8]}.json"
-        _save_private_keypair(save_path, nonce_kp)
+        try:
+            _save_private_keypair(save_path, nonce_kp)
+        except OSError as exc:
+            log_err(f"Failed to save nonce keypair: {exc}")
+            return None
         log_ok(f"Generated nonce keypair → {save_path}")
 
     payer_pubkey     = payer.pubkey()

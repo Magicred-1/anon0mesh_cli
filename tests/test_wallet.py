@@ -687,6 +687,16 @@ def test_create_nonce_account_generated_key_permissions(tmp_path, monkeypatch):
     assert stat.S_IMODE(nonce_paths[0].stat().st_mode) == 0o600
 
 
+def test_create_nonce_account_generated_key_write_failure(tmp_path, capsys):
+    _write_keypair(tmp_path / "payer.json")
+
+    with patch("wallet._save_private_keypair", side_effect=OSError("refused")):
+        result = wallet.create_nonce_account(str(tmp_path / "payer.json"))
+
+    assert result is None
+    assert "Failed to save nonce keypair: refused" in capsys.readouterr().out
+
+
 def test_create_nonce_account_invalid_authority(tmp_path, capsys):
     _write_keypair(tmp_path / "payer.json")
     _write_keypair(tmp_path / "nonce.json")
