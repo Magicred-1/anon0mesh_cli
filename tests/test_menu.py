@@ -5,13 +5,33 @@ import pytest
 import menu
 
 
-@pytest.mark.parametrize("raw", ["not-a-number", "nan", "inf", "-inf", "0", "-1"])
+@pytest.mark.parametrize("raw", [
+    "not-a-number", "nan", "inf", "-inf", "0", "-1",
+    "0.0000000001", "1e1000000000", "1e-1000000000",
+])
 def test_parse_positive_units_rejects_invalid_amount(raw):
     assert menu._parse_positive_units(raw, 1_000_000_000) is None
 
 
 def test_parse_positive_units_converts_decimal_amount():
     assert menu._parse_positive_units("1.5", 1_000_000_000) == 1_500_000_000
+
+
+def test_parse_positive_units_preserves_exact_u64_boundary():
+    assert menu._parse_positive_units("18446744073.709551615", 1_000_000_000) == (1 << 64) - 1
+
+
+def test_parse_positive_units_rejects_amount_above_u64_boundary():
+    assert menu._parse_positive_units("18446744073.709551616", 1_000_000_000) is None
+
+
+def test_parse_positive_units_rejects_fraction_hidden_beyond_decimal_precision():
+    assert menu._parse_positive_units("0.0000000010000000000000000000000000001", 1_000_000_000) is None
+
+
+@pytest.mark.parametrize("scale", [0, -1, True, 1.5])
+def test_parse_positive_units_rejects_invalid_scale(scale):
+    assert menu._parse_positive_units("1", scale) is None
 
 
 @pytest.mark.parametrize("raw", ["not-an-int", "-1", str(1 << 32)])

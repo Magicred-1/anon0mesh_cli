@@ -12,6 +12,7 @@ import os
 import sys
 import json
 import threading
+from decimal import Decimal, InvalidOperation
 
 import state
 from shared import (
@@ -42,6 +43,8 @@ _PROMPT_NONCE_ACCT = "Nonce account pubkey"
 _INVALID_AMOUNT    = "Invalid amount"
 _NO_WALLET         = "No wallet loaded — use WALLET › Generate or Import first"
 _MAX_U32           = (1 << 32) - 1
+_MAX_U64           = (1 << 64) - 1
+_MAX_AMOUNT_TEXT_LENGTH = 512
 
 _W              = 56       # visible width of section fill
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -54,14 +57,46 @@ _spinner_idx    = 0
 
 def _parse_positive_units(raw: str, scale: int) -> int | None:
     try:
-        amount = int(float(raw) * scale)
-    except (ValueError, OverflowError):
+        if (
+            len(raw) > _MAX_AMOUNT_TEXT_LENGTH
+            or isinstance(scale, bool)
+            or not isinstance(scale, int)
+            or scale <= 0
+        ):
+            raise ValueError
+        value = Decimal(raw)
+    except (InvalidOperation, ValueError):
         log_warn(_INVALID_AMOUNT)
         return None
-    if amount <= 0:
+    if not value.is_finite():
+        log_warn(_INVALID_AMOUNT)
+        return None
+    if value <= 0:
         log_warn("Amount must be greater than 0")
         return None
-    return amount
+
+    _, digits, exponent = value.as_tuple()
+    coefficient = int("".join(str(digit) for digit in digits))
+    scaled_coefficient = coefficient * scale
+    if exponent >= 0:
+        if exponent > 19 or scaled_coefficient > _MAX_U64 // (10 ** exponent):
+            log_warn("Amount exceeds maximum supported units")
+            return None
+        units = scaled_coefficient * (10 ** exponent)
+    else:
+        decimal_places = -exponent
+        if decimal_places > len(str(scaled_coefficient)):
+            log_warn("Amount has more decimal places than supported")
+            return None
+        units, remainder = divmod(scaled_coefficient, 10 ** decimal_places)
+        if remainder:
+            log_warn("Amount has more decimal places than supported")
+            return None
+
+    if units > _MAX_U64:
+        log_warn("Amount exceeds maximum supported units")
+        return None
+    return units
 
 
 def _bounded_env_int(name: str, default: str, maximum: int) -> int | None:
