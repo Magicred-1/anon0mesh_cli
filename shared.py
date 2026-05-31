@@ -265,6 +265,27 @@ MAX_MESH_RESPONSE_BYTES = 1024 * 1024
 MAX_RENDERED_LOG_LINES = 100
 MAX_RENDERED_TOKEN_ACCOUNTS = 100
 
+
+class ResponseSizeLimitError(ValueError):
+    """Raised when an upstream response exceeds a configured byte ceiling."""
+
+
+def read_limited_http_body(response: Any, max_bytes: int) -> bytes:
+    """Read a streamed HTTP response without buffering beyond max_bytes."""
+    chunks = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        if not isinstance(chunk, bytes):
+            raise TypeError("HTTP response chunk must be bytes")
+        total += len(chunk)
+        if total > max_bytes:
+            raise ResponseSizeLimitError(f"HTTP response exceeds {max_bytes} byte limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def compress_response(data: bytes) -> bytes:
     """Compress a response payload with zlib if it saves space."""
     compressed = zlib.compress(data, level=6)

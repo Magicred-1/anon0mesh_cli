@@ -65,6 +65,12 @@ def _execute_payment_transaction(extra_instructions=None, broadcaster=None, incl
     return tx, broadcaster
 
 
+def _http_response(body: bytes):
+    response = MagicMock()
+    response.iter_content.return_value = [body]
+    return response
+
+
 @pytest.mark.parametrize("payload", [[], "getBalance", 1, None])
 def test_beacon_rejects_non_object_json_without_forwarding(payload):
     with patch.object(beacon.requests, "post") as post:
@@ -333,9 +339,7 @@ def test_exit_node_connection_error_does_not_leak_rpc_credentials(monkeypatch, c
 
 
 def test_beacon_logs_scalar_rpc_error_without_traceback(capsys):
-    http_response = MagicMock()
-    http_response.content = b'{"error":"busy"}'
-    http_response.json.return_value = {"error": "busy"}
+    http_response = _http_response(b'{"error":"busy"}')
 
     with patch.object(beacon.requests, "post", return_value=http_response):
         response = decode_json(beacon.forward_plain_rpc({}, 1, 1, "getSlot"))
@@ -346,8 +350,7 @@ def test_beacon_logs_scalar_rpc_error_without_traceback(capsys):
 
 def test_beacon_ignores_non_list_simulation_logs(capsys):
     body = {"error": {"message": "failed", "data": {"logs": "do-not-iterate"}}}
-    http_response = MagicMock()
-    http_response.content = json.dumps(body).encode()
+    http_response = _http_response(json.dumps(body).encode())
 
     with patch.object(beacon.requests, "post", return_value=http_response):
         assert decode_json(beacon.forward_plain_rpc({}, 1, 1, "simulateTransaction")) == body
@@ -358,8 +361,7 @@ def test_beacon_ignores_non_list_simulation_logs(capsys):
 def test_beacon_caps_simulation_log_rendering(capsys):
     logs = [f"log-{index}" for index in range(101)]
     body = {"error": {"message": "failed", "data": {"logs": logs}}}
-    http_response = MagicMock()
-    http_response.content = json.dumps(body).encode()
+    http_response = _http_response(json.dumps(body).encode())
 
     with patch.object(beacon.requests, "post", return_value=http_response):
         assert decode_json(beacon.forward_plain_rpc({}, 1, 1, "simulateTransaction")) == body
@@ -371,9 +373,7 @@ def test_beacon_caps_simulation_log_rendering(capsys):
 
 
 def test_exit_node_logs_scalar_rpc_error_without_traceback(capsys):
-    http_response = MagicMock()
-    http_response.content = b'{"error":"busy"}'
-    http_response.json.return_value = {"error": "busy"}
+    http_response = _http_response(b'{"error":"busy"}')
 
     with patch.object(exit_node.requests, "post", return_value=http_response):
         response, method, _ = exit_node.forward_rpc(build_rpc("getSlot"))
@@ -390,8 +390,7 @@ def test_exit_node_logs_scalar_rpc_error_without_traceback(capsys):
     b'{"result":1,"error":"bad"}',
 ])
 def test_beacon_rejects_malformed_solana_response(body):
-    http_response = MagicMock()
-    http_response.content = body
+    http_response = _http_response(body)
 
     with patch.object(beacon.requests, "post", return_value=http_response):
         response = decode_json(beacon.forward_plain_rpc({}, 1, 1, "getSlot"))
@@ -406,8 +405,7 @@ def test_beacon_rejects_malformed_solana_response(body):
     b'{"result":1,"error":"bad"}',
 ])
 def test_exit_node_rejects_malformed_solana_response(body):
-    http_response = MagicMock()
-    http_response.content = body
+    http_response = _http_response(body)
 
     with patch.object(exit_node.requests, "post", return_value=http_response):
         response, method, _ = exit_node.forward_rpc(build_rpc("getSlot"))
@@ -417,21 +415,23 @@ def test_exit_node_rejects_malformed_solana_response(body):
 
 
 def test_beacon_rejects_oversized_solana_response():
-    http_response = MagicMock()
-    http_response.content = b"x" * (MAX_MESH_RESPONSE_BYTES + 1)
+    http_response = _http_response(b"x" * (MAX_MESH_RESPONSE_BYTES + 1))
 
-    with patch.object(beacon.requests, "post", return_value=http_response):
+    with patch.object(beacon.requests, "post", return_value=http_response) as post:
         response = decode_json(beacon.forward_plain_rpc({}, 1, 1, "getSlot"))
 
     assert response["error"]["message"] == "Solana RPC response exceeds mesh size limit"
+    assert post.call_args.kwargs["stream"] is True
+    http_response.close.assert_called_once_with()
 
 
 def test_exit_node_rejects_oversized_solana_response():
-    http_response = MagicMock()
-    http_response.content = b"x" * (MAX_MESH_RESPONSE_BYTES + 1)
+    http_response = _http_response(b"x" * (MAX_MESH_RESPONSE_BYTES + 1))
 
-    with patch.object(exit_node.requests, "post", return_value=http_response):
+    with patch.object(exit_node.requests, "post", return_value=http_response) as post:
         response, method, _ = exit_node.forward_rpc(build_rpc("getSlot"))
 
     assert decode_json(response)["error"]["message"] == "Solana RPC response exceeds mesh size limit"
     assert method == "getSlot"
+    assert post.call_args.kwargs["stream"] is True
+    http_response.close.assert_called_once_with()

@@ -293,6 +293,30 @@ def test_load_dotenv_private_skips_symlink_without_chmod_target(tmp_path, monkey
 
 # ── response compression ──────────────────────────────────────────────────────
 
+def test_read_limited_http_body_assembles_streamed_chunks():
+    class Response:
+        def iter_content(self, chunk_size):
+            assert chunk_size == 64 * 1024
+            return iter([b"first", b"", b"-second"])
+
+    assert shared.read_limited_http_body(Response(), 12) == b"first-second"
+
+
+def test_read_limited_http_body_stops_at_size_limit():
+    consumed = []
+
+    class Response:
+        def iter_content(self, chunk_size):
+            for chunk in (b"1234", b"5", b"must-not-read"):
+                consumed.append(chunk)
+                yield chunk
+
+    with pytest.raises(shared.ResponseSizeLimitError, match="4 byte limit"):
+        shared.read_limited_http_body(Response(), 4)
+
+    assert consumed == [b"1234", b"5"]
+
+
 def test_compressed_response_roundtrip():
     raw = b"repeated payload " * 100
     assert shared.decompress_response(shared.compress_response(raw)) == raw

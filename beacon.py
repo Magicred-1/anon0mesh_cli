@@ -81,7 +81,8 @@ from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT, MAX_MESH_REQUEST_BYTES, MAX_MESH_RESPONSE_BYTES,
     MAX_RENDERED_LOG_LINES,
-    decode_json, decode_rpc_response, build_response, compress_response, redact_url, rpc_error_message,
+    ResponseSizeLimitError, decode_json, decode_rpc_response, build_response, compress_response,
+    read_limited_http_body, redact_url, rpc_error_message,
     load_dotenv_private, positive_int, read_private_file,
     restrict_private_file_permissions, save_private_identity,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
@@ -352,12 +353,17 @@ def forward_plain_rpc(req: dict, req_id: int, count: int, method: str) -> bytes:
             timeout=20,
             headers={"Content-Type": "application/json"},
             verify=_cert,
+            stream=True,
         )
-        http_resp.raise_for_status()
-        result_bytes = http_resp.content
-        if len(result_bytes) > MAX_MESH_RESPONSE_BYTES:
-            log_err(f"[#{count}] Solana RPC response exceeds mesh size limit")
-            return build_response(error="Solana RPC response exceeds mesh size limit", req_id=req_id)
+        try:
+            http_resp.raise_for_status()
+            try:
+                result_bytes = read_limited_http_body(http_resp, MAX_MESH_RESPONSE_BYTES)
+            except ResponseSizeLimitError:
+                log_err(f"[#{count}] Solana RPC response exceeds mesh size limit")
+                return build_response(error="Solana RPC response exceeds mesh size limit", req_id=req_id)
+        finally:
+            http_resp.close()
         try:
             parsed = decode_rpc_response(result_bytes)
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
