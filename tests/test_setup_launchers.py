@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import subprocess
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SETUP = PROJECT_ROOT / "setup.sh"
@@ -83,6 +85,28 @@ def test_atomic_private_append_refuses_symlink(tmp_path):
 
     assert result.returncode != 0
     assert target.read_text() == "old"
+
+
+def test_systemd_escape_path_escapes_spaces_and_percents(tmp_path):
+    destination = tmp_path / "before space%done"
+
+    result = _run_helper('systemd_escape_path "$DEST"', destination)
+
+    expected = (
+        str(destination)
+        .replace(" ", r"\x20")
+        .replace("%", "%%")
+    )
+    assert result.returncode == 0
+    assert result.stdout == expected
+
+
+@pytest.mark.parametrize("name", ['before"after', "before\\after", "before\nafter"])
+def test_systemd_escape_path_rejects_unsupported_characters(tmp_path, name):
+    result = _run_helper('systemd_escape_path "$DEST"', tmp_path / name)
+
+    assert result.returncode != 0
+    assert "Cannot write systemd service" in result.stdout
 
 
 def test_setup_inline_python_receives_filesystem_paths_through_env():

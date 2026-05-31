@@ -84,6 +84,17 @@ atomic_private_append() {
   fi
 }
 
+systemd_escape_path() {
+  local value="$1"
+  if [[ "$value" =~ [[:cntrl:]] || "$value" == *\\* || "$value" == *\"* ]]; then
+    log_err "Cannot write systemd service for path containing control characters, quotes, or backslashes"
+    return 1
+  fi
+  value="${value// /\\x20}"
+  value="${value//%/%%}"
+  printf '%s' "$value"
+}
+
 # ── Defaults ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/venv"
@@ -627,6 +638,8 @@ if [[ "$INSTALL_BEACON" == true && "$INSTALL_SYSTEMD" == true ]]; then
 
   SERVICE_FILE="/etc/systemd/system/anon0mesh-beacon.service"
   CURRENT_USER="$(whoami)"
+  SYSTEMD_WORKING_DIRECTORY="$(systemd_escape_path "$SCRIPT_DIR")"
+  SYSTEMD_EXEC_START="$(systemd_escape_path "$SCRIPT_DIR/run_beacon.sh")"
 
   sudo tee "$SERVICE_FILE" > /dev/null << SERVICE
 [Unit]
@@ -638,8 +651,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=${CURRENT_USER}
-WorkingDirectory=${SCRIPT_DIR}
-ExecStart=${SCRIPT_DIR}/run_beacon.sh
+WorkingDirectory=${SYSTEMD_WORKING_DIRECTORY}
+ExecStart=${SYSTEMD_EXEC_START}
 Restart=on-failure
 RestartSec=10
 UMask=0077
