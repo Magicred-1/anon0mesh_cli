@@ -37,6 +37,23 @@ def _encrypt_payload() -> dict:
 VALID_HEX_32 = "ab" * 32
 VALID_HEX_16 = "cd" * 16
 VALID_CIPHERTEXT = [1] * 32
+VALID_PUBKEY = "11111111111111111111111111111111"
+
+
+def _payment_client(rpc_url: str = "https://rpc.example.test"):
+    client = object.__new__(arcium_client.ArciumBeaconClient)
+    client.rpc_url = rpc_url
+    client.program_id = arcium_client.MXE_PROGRAM_ID
+    client._payer_hex = "00"
+    client._payer_b58 = VALID_PUBKEY
+    client.mxe_pubkey_hex = VALID_HEX_32
+    client.cluster_offset = 456
+    return client
+
+
+def _clear_optional_payment_accounts(monkeypatch):
+    monkeypatch.delenv("ARCIUM_BROADCASTER_TOKEN_ACCOUNT", raising=False)
+    monkeypatch.delenv("ARCIUM_TREASURY_TOKEN_ACCOUNT", raising=False)
 
 
 # ── _run_shim ─────────────────────────────────────────────────────────────────
@@ -322,18 +339,15 @@ def test_rescue_shared_secret_rejects_invalid_request_without_running_shim(mock_
 
 
 @patch("arcium_client._run_shim")
-def test_log_payment_stats_redacts_shim_error(mock_shim, capsys):
+def test_log_payment_stats_redacts_shim_error(mock_shim, monkeypatch, capsys):
     secret_url = "https://user:pass@rpc.example.test/private?api-key=secret"
     mock_shim.side_effect = RuntimeError(f"request to {secret_url} failed")
-    client = object.__new__(arcium_client.ArciumBeaconClient)
-    client.rpc_url = secret_url
-    client.program_id = arcium_client.MXE_PROGRAM_ID
-    client._payer_hex = "00"
-    client._payer_b58 = "payer"
-    client.mxe_pubkey_hex = "mxe"
-    client.cluster_offset = 456
+    _clear_optional_payment_accounts(monkeypatch)
+    client = _payment_client(secret_url)
 
-    result = asyncio.run(client.log_payment_stats(1, "payer-ta", "recipient", "recipient-ta", "mint"))
+    result = asyncio.run(client.log_payment_stats(
+        1, VALID_PUBKEY, VALID_PUBKEY, VALID_PUBKEY, VALID_PUBKEY,
+    ))
 
     assert result["message"] == "request to https://rpc.example.test/... failed"
     assert "user:pass" not in capsys.readouterr().out
@@ -342,22 +356,32 @@ def test_log_payment_stats_redacts_shim_error(mock_shim, capsys):
 
 @pytest.mark.parametrize("signature", [None, "", [], True])
 @patch("arcium_client._run_shim")
-def test_log_payment_stats_rejects_invalid_shim_signature(mock_shim, signature):
+def test_log_payment_stats_rejects_invalid_shim_signature(mock_shim, signature, monkeypatch):
     mock_shim.return_value = {"signature": signature}
-    client = object.__new__(arcium_client.ArciumBeaconClient)
-    client.rpc_url = "https://rpc.example.test"
-    client.program_id = arcium_client.MXE_PROGRAM_ID
-    client._payer_hex = "00"
-    client._payer_b58 = "payer"
-    client.mxe_pubkey_hex = "mxe"
-    client.cluster_offset = 456
+    _clear_optional_payment_accounts(monkeypatch)
+    client = _payment_client()
 
-    result = asyncio.run(client.log_payment_stats(1, "payer-ta", "recipient", "recipient-ta", "mint"))
+    result = asyncio.run(client.log_payment_stats(
+        1, VALID_PUBKEY, VALID_PUBKEY, VALID_PUBKEY, VALID_PUBKEY,
+    ))
 
     assert result == {
         "status": "error",
         "message": "shim execute_payment returned an invalid signature",
     }
+
+
+@patch("arcium_client._run_shim")
+def test_log_payment_stats_rejects_invalid_metadata_without_running_shim(mock_shim, monkeypatch):
+    _clear_optional_payment_accounts(monkeypatch)
+    client = _payment_client()
+
+    result = asyncio.run(client.log_payment_stats(
+        1, "not-a-pubkey", VALID_PUBKEY, VALID_PUBKEY, VALID_PUBKEY,
+    ))
+
+    assert result == {"status": "error", "message": "invalid Arcium payment metadata"}
+    mock_shim.assert_not_called()
 
 
 # ── ArciumBeacon (disabled path) ──────────────────────────────────────────────

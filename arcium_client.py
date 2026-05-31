@@ -39,6 +39,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+Pubkey = None
 try:
     from solders.keypair import Keypair
     from solders.pubkey  import Pubkey
@@ -67,6 +68,7 @@ POLL_INTERVAL          = 2.0
 POLL_TIMEOUT           = 120.0
 SHIM_PATH              = Path(__file__).parent / "rescue_shim.mjs"
 _MAX_U32               = (1 << 32) - 1
+_MAX_U64               = (1 << 64) - 1
 _MAX_U128              = (1 << 128) - 1
 _MAX_FIELD_VALUE       = (1 << 256) - 1
 _MAX_RESCUE_VALUES     = 100
@@ -87,6 +89,16 @@ def _is_byte_array(value: object, byte_length: int) -> bool:
         and len(value) == byte_length
         and all(isinstance(item, int) and not isinstance(item, bool) and 0 <= item <= 255 for item in value)
     )
+
+
+def _is_solana_pubkey(value: object) -> bool:
+    if Pubkey is None or not isinstance(value, str):
+        return False
+    try:
+        Pubkey.from_string(value)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _is_bounded_decimal(value: object, maximum: int) -> bool:
@@ -281,6 +293,25 @@ class ArciumBeaconClient:
         if not broadcaster_token_account:
             broadcaster_token_account = os.getenv("ARCIUM_BROADCASTER_TOKEN_ACCOUNT") or None
         treasury_token_account = os.getenv("ARCIUM_TREASURY_TOKEN_ACCOUNT") or None
+
+        account_fields = (
+            payer_token_account,
+            recipient,
+            recipient_token_account,
+            mint,
+            broadcaster,
+        )
+        optional_account_fields = (broadcaster_token_account, treasury_token_account)
+        if (
+            isinstance(amount, bool)
+            or not isinstance(amount, int)
+            or not 0 <= amount <= _MAX_U64
+            or any(not _is_solana_pubkey(value) for value in account_fields)
+            or any(value is not None and not _is_solana_pubkey(value) for value in optional_account_fields)
+        ):
+            message = "invalid Arcium payment metadata"
+            log_err(message)
+            return {"status": "error", "message": message}
 
         # The shim handles encryption (x25519 + RescueCipher) using mxePubkeyHex directly.
         shim_args = json.dumps({
