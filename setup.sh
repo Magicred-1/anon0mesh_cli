@@ -718,7 +718,9 @@ import os, json
 from solders.keypair import Keypair
 kp   = Keypair()
 path = os.environ["ANON0MESH_KP_PATH"]
-with open(path, "w") as f:
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    os.fchmod(f.fileno(), 0o600)
     json.dump(list(bytes(kp)), f)
 print(f"  Public key : {kp.pubkey()}")
 print(f"  Saved to   : {path}")
@@ -818,7 +820,9 @@ try:
 
     nonce_kp   = Keypair()
     nonce_path = os.path.join(SAVE_DIR, f"nonce_{str(nonce_kp.pubkey())[:8]}.json")
-    with open(nonce_path, "w") as f:
+    fd = os.open(nonce_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        os.fchmod(f.fileno(), 0o600)
         json.dump(list(bytes(nonce_kp)), f)
 
     payer_pub = payer.pubkey()

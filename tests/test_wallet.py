@@ -5,6 +5,7 @@ Requires: pip install solders
 
 import json
 import base64
+import stat
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -79,6 +80,14 @@ def test_generate_wallet_keypair_is_valid(tmp_path):
     assert str(kp.pubkey()) == state.active_wallet["pubkey"]
 
 
+def test_generate_wallet_permissions_owner_only(tmp_path):
+    path = tmp_path / "w.json"
+    path.write_text("existing file with permissive mode")
+    path.chmod(0o666)
+    wallet.generate_wallet(str(path))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 def test_generate_wallet_bad_path(capsys):
     result = wallet.generate_wallet("/nonexistent_dir/wallet.json")
     assert result is None
@@ -116,6 +125,13 @@ def test_import_wallet_json_array_saves_file(tmp_path):
     wallet.import_wallet(json.dumps(list(bytes(kp))), path)
     saved = json.loads(Path(path).read_text())
     assert saved == list(bytes(kp))
+
+
+def test_import_wallet_permissions_owner_only(tmp_path):
+    kp = Keypair()
+    path = tmp_path / "imported.json"
+    wallet.import_wallet(json.dumps(list(bytes(kp))), str(path))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_import_wallet_invalid_json_array(tmp_path, capsys):
@@ -384,3 +400,18 @@ def test_create_nonce_account_authority_param_name(tmp_path):
         except ValueError as e:
             pytest.fail(f"InitializeNonceAccountParams raised ValueError: {e}")
     assert result is not None
+
+
+def test_create_nonce_account_generated_key_permissions(tmp_path, monkeypatch):
+    _write_keypair(tmp_path / "payer.json")
+    monkeypatch.chdir(tmp_path)
+    mock_blockhash = MagicMock(return_value="4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi")
+
+    with patch("rpc.rpc_call", side_effect=[{"result": 1_447_680}, {"result": "SIG"}]), \
+         patch("rpc.get_recent_blockhash", mock_blockhash):
+        result = wallet.create_nonce_account(str(tmp_path / "payer.json"))
+
+    assert result is not None
+    nonce_paths = list(tmp_path.glob("nonce_*.json"))
+    assert len(nonce_paths) == 1
+    assert stat.S_IMODE(nonce_paths[0].stat().st_mode) == 0o600

@@ -41,6 +41,20 @@ NONCE_ACCOUNT_LENGTH = 80
 _ERR_NONCE = "Could not fetch nonce account"
 
 
+def _save_private_keypair(path: str, keypair: "Keypair") -> None:
+    """Write a Solana keypair with owner-only permissions, including overwrites."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        file_obj = os.fdopen(fd, "w")
+        fd = -1
+        with file_obj as f:
+            json.dump(list(bytes(keypair)), f)
+    finally:
+        if fd != -1:
+            os.close(fd)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Auto-detection
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -99,8 +113,7 @@ def generate_wallet(save_path: str | None = None) -> str | None:
     path   = save_path or f"wallet_{pubkey[:8]}.json"
 
     try:
-        with open(path, "w") as f:
-            json.dump(list(bytes(kp)), f)
+        _save_private_keypair(path, kp)
     except OSError as exc:
         log_err(f"Failed to save keypair: {exc}")
         return None
@@ -164,8 +177,7 @@ def import_wallet(raw: str, save_path: str) -> str | None:
             return None
 
     try:
-        with open(save_path, "w") as f:
-            json.dump(list(bytes(kp)), f)
+        _save_private_keypair(save_path, kp)
     except OSError as exc:
         log_err(f"Failed to save keypair: {exc}")
         return None
@@ -570,8 +582,7 @@ def create_nonce_account(
     else:
         nonce_kp  = Keypair()
         save_path = f"nonce_{str(nonce_kp.pubkey())[:8]}.json"
-        with open(save_path, "w") as f:
-            json.dump(list(bytes(nonce_kp)), f)
+        _save_private_keypair(save_path, nonce_kp)
         log_ok(f"Generated nonce keypair → {save_path}")
 
     payer_pubkey     = payer.pubkey()
