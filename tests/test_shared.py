@@ -113,6 +113,18 @@ def test_rpc_error_message_accepts_scalar_error():
     assert shared.rpc_error_message("busy") == "busy"
 
 
+# ── numeric parsing ───────────────────────────────────────────────────────────
+
+def test_positive_int_accepts_positive_value():
+    assert shared.positive_int("15") == 15
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "not-a-number"])
+def test_positive_int_rejects_non_positive_or_invalid_value(value):
+    with pytest.raises(ValueError):
+        shared.positive_int(value)
+
+
 # ── private local files ───────────────────────────────────────────────────────
 
 def test_restrict_private_file_permissions_repairs_existing_file(tmp_path):

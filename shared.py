@@ -109,6 +109,14 @@ def rpc_error_message(error: Any, default: str = "?") -> str:
     return str(error)
 
 
+def positive_int(raw_value: str) -> int:
+    """Parse a command-line integer that must be greater than zero."""
+    value = int(raw_value)
+    if value <= 0:
+        raise ValueError("expected a positive integer")
+    return value
+
+
 # ── Private local files ──────────────────────────────────────────────────────
 
 def restrict_private_file_permissions(path: str) -> None:

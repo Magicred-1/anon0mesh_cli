@@ -40,7 +40,7 @@ from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT,
     decode_json, build_response, compress_response, redact_url, rpc_error_message,
-    restrict_private_file_permissions, save_private_identity,
+    positive_int, restrict_private_file_permissions, save_private_identity,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
     BOLD, CYAN, GREEN, RESET, DIM,
 )
@@ -332,7 +332,7 @@ def main():
                         help="Solana network (default: devnet)")
     parser.add_argument("--rpc", default=None,
                         help="Custom RPC URL (prefer ANONMESH_RPC_URL for credentials)")
-    parser.add_argument("--announce-interval", "-a", default=300, type=int,
+    parser.add_argument("--announce-interval", "-a", default=300, type=positive_int,
                         metavar="SECONDS", help="Re-announce interval (default: 300s)")
     args = parser.parse_args()
 
