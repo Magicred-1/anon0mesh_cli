@@ -6,6 +6,17 @@ import { readPrivateTextFileSync } from "./private_file.mjs";
 const PROGRAM_ID = new PublicKey("7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks");
 const ARCIUM_PROGRAM_ID = new PublicKey("Arcj82pX7HxYKLR92qvgZUAd7vGS1k4hQvAFcPATFdEQ");
 const INIT_PAYMENT_STATS_COMP_DEF_IX = Buffer.from([96, 78, 230, 203, 169, 42, 127, 99]);
+const MAX_RENDERED_LOG_LINES = 100;
+const MAX_RENDERED_LOG_LENGTH = 4096;
+
+function terminalSafeText(value) {
+  const text = String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, char =>
+    `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`
+  );
+  return text.length > MAX_RENDERED_LOG_LENGTH
+    ? `${text.slice(0, MAX_RENDERED_LOG_LENGTH)}... [truncated]`
+    : text;
+}
 
 const keyPath = process.env.ARCIUM_PAYER_KEYPAIR || process.env.ANCHOR_WALLET;
 if (!keyPath) {
@@ -83,7 +94,12 @@ try {
   const logs = err?.transactionLogs || err?.logs;
   if (Array.isArray(logs)) {
     console.error("Simulation logs:");
-    for (const line of logs) console.error("  ", line);
+    for (const line of logs.slice(0, MAX_RENDERED_LOG_LINES)) {
+      console.error("  ", terminalSafeText(line));
+    }
+    if (logs.length > MAX_RENDERED_LOG_LINES) {
+      console.error(`  ... ${logs.length - MAX_RENDERED_LOG_LINES} more lines omitted`);
+    }
   }
   console.error("init_payment_stats_comp_def failed:", err?.name || "request failed");
   process.exitCode = 1;
