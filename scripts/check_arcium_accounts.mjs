@@ -77,7 +77,14 @@ console.log(`Mint    : ${MINT}\n`);
 
 let allGood = true;
 for (const [label, address] of Object.entries(checks)) {
-    const info = await connection.getAccountInfo(new PublicKey(address));
+    let info;
+    try {
+        info = await connection.getAccountInfo(new PublicKey(address));
+    } catch {
+        console.error(`✘ ${label.padEnd(32)} RPC request failed`);
+        allGood = false;
+        continue;
+    }
     const ok   = info !== null;
     const size = ok ? `${info.data.length}B` : "NOT FOUND";
     console.log(`${ok ? "✔" : "✘"} ${label.padEnd(32)} ${address.slice(0,20)}…  ${size}`);
@@ -87,3 +94,4 @@ for (const [label, address] of Object.entries(checks)) {
 console.log(allGood
     ? "\n✔ All accounts present — ready to execute_payment"
     : "\n✘ Missing accounts above must be initialized first");
+if (!allGood) process.exitCode = 1;

@@ -3,6 +3,7 @@ tests/test_arcium_client.py — unit tests for arcium_client.py
 Shim subprocess calls are mocked; no Node.js required.
 """
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -67,6 +68,20 @@ def test_run_shim_falls_back_to_stderr_in_error_msg(mock_run, tmp_path):
         mock_run.return_value = _proc("", returncode=1, stderr="stderr detail")
         with pytest.raises(RuntimeError, match="stderr detail"):
             arcium_client._run_shim("cmd")
+
+
+@patch("subprocess.run")
+def test_run_shim_redacts_url_in_non_json_error(mock_run, tmp_path):
+    shim = tmp_path / "rescue_shim.mjs"
+    shim.touch()
+    secret_url = "https://user:pass@rpc.example.test/private?api-key=secret"
+    with patch.object(arcium_client, "SHIM_PATH", shim):
+        mock_run.return_value = _proc("", returncode=1, stderr=f"request to {secret_url} failed")
+        with pytest.raises(RuntimeError) as exc_info:
+            arcium_client._run_shim("cmd")
+    assert "https://rpc.example.test/..." in str(exc_info.value)
+    assert "user:pass" not in str(exc_info.value)
+    assert "secret" not in str(exc_info.value)
 
 
 @patch("subprocess.run")
@@ -188,6 +203,25 @@ def test_rescue_shared_secret_returns_hex(mock_shim):
     mock_shim.return_value = {"ok": True, "shared_secret_hex": "cafebabe"}
     result = arcium_client.rescue_shared_secret("priv", "pub")
     assert result == "cafebabe"
+
+
+@patch("arcium_client._run_shim")
+def test_log_payment_stats_redacts_shim_error(mock_shim, capsys):
+    secret_url = "https://user:pass@rpc.example.test/private?api-key=secret"
+    mock_shim.side_effect = RuntimeError(f"request to {secret_url} failed")
+    client = object.__new__(arcium_client.ArciumBeaconClient)
+    client.rpc_url = secret_url
+    client.program_id = arcium_client.MXE_PROGRAM_ID
+    client._payer_hex = "00"
+    client._payer_b58 = "payer"
+    client.mxe_pubkey_hex = "mxe"
+    client.cluster_offset = 456
+
+    result = asyncio.run(client.log_payment_stats(1, "payer-ta", "recipient", "recipient-ta", "mint"))
+
+    assert result["message"] == "request to https://rpc.example.test/... failed"
+    assert "user:pass" not in capsys.readouterr().out
+    assert "secret" not in result["message"]
 
 
 # ── ArciumBeacon (disabled path) ──────────────────────────────────────────────

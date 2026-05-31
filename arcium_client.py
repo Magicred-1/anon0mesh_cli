@@ -48,7 +48,7 @@ try:
 except ImportError:
     HAS_SOLANA = False
 
-from shared import log_info, log_ok, log_warn, log_err
+from shared import log_info, log_ok, log_warn, log_err, redact_urls
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 # declare_id! in programs/ble-revshare/src/lib.rs + Anchor.toml [programs.devnet]
@@ -91,9 +91,10 @@ def _run_shim(*args: str, stdin_data: str | None = None, timeout: int = 60) -> d
         data = json.loads(result.stdout)
     except json.JSONDecodeError:
         raw = result.stderr.strip() or result.stdout.strip()
-        raise RuntimeError(f"shim non-JSON output (exit {result.returncode}): {raw[:300]}")
+        raise RuntimeError(f"shim non-JSON output (exit {result.returncode}): {redact_urls(raw[:300])}")
     if not data.get("ok"):
-        raise RuntimeError(data.get("error") or f"shim error (exit {result.returncode})")
+        error = data.get("error") or f"shim error (exit {result.returncode})"
+        raise RuntimeError(redact_urls(str(error)))
     return data
 
 
@@ -212,8 +213,9 @@ class ArciumBeaconClient:
             log_ok(f"Payment stats logged  sig={result['signature'][:20]}...")
             return {"status": "ok", "signature": result["signature"]}
         except Exception as exc:
-            log_err(f"execute_payment failed: {exc}")
-            return {"status": "error", "message": str(exc)}
+            error = redact_urls(str(exc))
+            log_err(f"execute_payment failed: {error}")
+            return {"status": "error", "message": error}
 
     async def close(self):
         if self._client:
@@ -252,7 +254,7 @@ class ArciumBeacon:
             try:
                 fut.result(timeout=15)
             except Exception as exc:
-                log_err(f"Arcium init failed: {exc}")
+                log_err(f"Arcium init failed: {redact_urls(str(exc))}")
                 self.enabled = False
 
     @classmethod
@@ -306,7 +308,7 @@ class ArciumBeacon:
             return cls(client)
 
         except (KeyError, FileNotFoundError) as exc:
-            log_err(f"Arcium env error: {exc}")
+            log_err(f"Arcium env error: {redact_urls(str(exc))}")
             return cls(None)
 
     def log_payment_stats(
@@ -335,7 +337,7 @@ class ArciumBeacon:
             try:
                 return fut.result(timeout=POLL_TIMEOUT + 15)
             except Exception as exc:
-                log_err(f"Arcium log_payment_stats failed: {exc}")
+                log_err(f"Arcium log_payment_stats failed: {redact_urls(str(exc))}")
 
         # Run in background thread — don't block the RPC response to the client
         threading.Thread(target=_run, daemon=True).start()

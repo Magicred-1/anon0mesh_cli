@@ -43,7 +43,10 @@ const COMP_DEF_NAME = "payment_stats";
 function u8a(hex)  { return Uint8Array.from(Buffer.from(hex, "hex")); }
 function hex(u8)   { return Buffer.from(u8).toString("hex"); }
 function out(data) { console.log(JSON.stringify({ ok: true,  ...data })); }
-function fail(msg) { console.log(JSON.stringify({ ok: false, error: msg })); process.exit(1); }
+function redactUrls(msg) {
+    return String(msg).replace(/https?:\/\/[^\s"'`]+/g, "<redacted-rpc-url>");
+}
+function fail(msg) { console.log(JSON.stringify({ ok: false, error: redactUrls(msg) })); process.exit(1); }
 
 function deserializeLE(bytes) {
     let result = 0n;
@@ -110,12 +113,13 @@ try {
 
     } else if (cmd === "mxe_pubkey") {
         // Fetch MXE x25519 pubkey from chain
-        const [programId, rpcUrl] = args;
+        const [programId, rpcArg] = args;
+        if (rpcArg) fail("Pass custom RPC via ARCIUM_RPC_URL so credentials stay out of process arguments");
         const progId = programId || MXE_PROGRAM_ID;
 
         const { Connection, PublicKey, Keypair } = await import("@solana/web3.js");
         const anchor = await import("@coral-xyz/anchor");
-        const connection = new Connection(rpcUrl || "https://api.devnet.solana.com", "confirmed");
+        const connection = new Connection(process.env.ARCIUM_RPC_URL || "https://api.devnet.solana.com", "confirmed");
         const dummyKp    = Keypair.generate();
         const provider   = new anchor.AnchorProvider(
             connection,

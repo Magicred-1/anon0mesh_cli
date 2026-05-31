@@ -36,7 +36,13 @@ console.log("clusterOffset:", clusterOffset);
 console.log("mxeAccount:", mxeAccount.toBase58());
 console.log("compDefAccount:", compDefAccount.toBase58());
 
-const existing = await connection.getAccountInfo(compDefAccount, "confirmed");
+let existing;
+try {
+  existing = await connection.getAccountInfo(compDefAccount, "confirmed");
+} catch {
+  console.error("Unable to query compDefAccount: RPC request failed");
+  process.exit(1);
+}
 if (existing) {
   console.log("compDefAccount already initialized; nothing to do.");
   process.exit(0);
@@ -75,5 +81,6 @@ try {
     console.error("Simulation logs:");
     for (const line of logs) console.error("  ", line);
   }
-  throw err;
+  console.error("init_payment_stats_comp_def failed:", err?.name || "request failed");
+  process.exitCode = 1;
 }

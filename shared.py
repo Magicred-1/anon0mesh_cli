@@ -16,6 +16,7 @@ Reticulum handles all encryption (X25519 + AES-256-GCM) automatically.
 """
 
 import json
+import re
 import time
 import zlib
 from typing import Any
@@ -88,6 +89,14 @@ def redact_url(url: str) -> str:
         or parts.query or parts.fragment
     ) else ""
     return f"{parts.scheme}://{host}{port}{suffix}"
+
+
+_URL_RE = re.compile(r"""https?://[^\s'"`]+""")
+
+
+def redact_urls(text: str) -> str:
+    """Redact embedded HTTP(S) endpoints in diagnostic text."""
+    return _URL_RE.sub(lambda match: redact_url(match.group(0)), text)
 
 
 # ── Mesh payload compression ─────────────────────────────────────────────────

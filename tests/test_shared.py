@@ -92,6 +92,11 @@ def test_redact_url_rejects_non_url_values():
     assert shared.redact_url("not-a-url") == "<redacted-rpc-url>"
 
 
+def test_redact_urls_hides_embedded_credentials_and_path_tokens():
+    text = "request to https://user:pass@rpc.example.test/private?api-key=secret failed"
+    assert shared.redact_urls(text) == "request to https://rpc.example.test/... failed"
+
+
 # ── quiet mode ─────────────────────────────────────────────────────────────────
 
 def test_log_info_visible_by_default(capsys):
