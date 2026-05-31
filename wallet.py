@@ -40,6 +40,7 @@ except ImportError:
 # Fixed size of a nonce account on Solana (defined by the runtime)
 NONCE_ACCOUNT_LENGTH = 80
 _ERR_NONCE = "Could not fetch nonce account"
+_MAX_U32 = (1 << 32) - 1
 _MAX_U64 = (1 << 64) - 1
 
 
@@ -373,6 +374,9 @@ def partial_sign_execute_payment(
         return None
     if not _validate_u64(amount, "Amount"):
         return None
+    if isinstance(cluster_offset, bool) or not isinstance(cluster_offset, int) or not 0 <= cluster_offset <= _MAX_U32:
+        log_err(f"Cluster offset must be an integer between 0 and {_MAX_U32}")
+        return None
 
     try:
         from arcium_client import rescue_encrypt, _run_shim
@@ -412,9 +416,17 @@ def partial_sign_execute_payment(
         return None
     try:
         pub_key_hex = enc["pubkey_hex"]
-        nonce_bn = int(enc["nonce_bn"])
+        nonce_raw = enc["nonce_bn"]
+        if not isinstance(nonce_raw, str) or not nonce_raw.isdecimal():
+            raise ValueError("nonce_bn must be an unsigned decimal string")
+        nonce_bn = int(nonce_raw)
         # Rescue ciphertext for the amount — 32-byte field element passed to Arcium
         encrypted_amount = bytes(enc["ciphertexts"][0])
+        if len(encrypted_amount) != 32:
+            raise ValueError("encrypted amount must be 32 bytes")
+        public_key = bytes.fromhex(pub_key_hex)
+        if len(public_key) != 32:
+            raise ValueError("ephemeral public key must be 32 bytes")
         # Instruction data layout (fixed contract):
         # [disc 8B][comp_offset 8B LE][amount 8B LE][encrypted_amount 32B][nonce 16B LE][pub_key 32B] = 104 bytes
         disc = hashlib.sha256(b"global:execute_payment").digest()[:8]
@@ -424,7 +436,7 @@ def partial_sign_execute_payment(
             + amount.to_bytes(8, "little")
             + encrypted_amount
             + nonce_bn.to_bytes(16, "little")
-            + bytes.fromhex(pub_key_hex)
+            + public_key
         )
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
         log_err(f"Invalid Arcium encryption payload: {exc}")

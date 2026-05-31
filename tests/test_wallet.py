@@ -521,6 +521,22 @@ def test_partial_sign_execute_payment_rejects_out_of_range_amount(capsys, amount
     assert "Amount must be an integer between" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("cluster_offset", [-1, True, 1 << 32])
+def test_partial_sign_execute_payment_rejects_out_of_range_cluster_offset(capsys, cluster_offset):
+    result = wallet.partial_sign_execute_payment(
+        "unused.json",
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        1_000,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+        cluster_offset=cluster_offset,
+    )
+    assert result is None
+    assert "Cluster offset must be an integer between" in capsys.readouterr().out
+
+
 @patch("wallet._account_exists", return_value=True)
 @patch("arcium_client._run_shim")
 @patch("arcium_client.rescue_encrypt")
@@ -550,6 +566,33 @@ def test_partial_sign_execute_payment_invalid_nonce_value(mock_encrypt, mock_shi
 @patch("arcium_client.rescue_encrypt")
 def test_partial_sign_execute_payment_invalid_encryption_payload(mock_encrypt, mock_shim, tmp_path, capsys):
     mock_encrypt.return_value = {}
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.partial_sign_execute_payment(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        1_000,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+    )
+    assert result is None
+    assert "Invalid Arcium encryption payload" in capsys.readouterr().out
+    mock_shim.assert_not_called()
+
+
+@pytest.mark.parametrize("payload", [
+    {"ciphertexts": [[0] * 31], "pubkey_hex": "00" * 32, "nonce_bn": "0"},
+    {"ciphertexts": [[0] * 32], "pubkey_hex": "00" * 31, "nonce_bn": "0"},
+    {"ciphertexts": [[0] * 32], "pubkey_hex": "00" * 32, "nonce_bn": True},
+    {"ciphertexts": [[0] * 32], "pubkey_hex": "00" * 32, "nonce_bn": "-1"},
+])
+@patch("arcium_client._run_shim")
+@patch("arcium_client.rescue_encrypt")
+def test_partial_sign_execute_payment_rejects_malformed_encryption_fields(
+    mock_encrypt, mock_shim, tmp_path, capsys, payload,
+):
+    mock_encrypt.return_value = payload
     _write_keypair(tmp_path / "payer.json")
     result = wallet.partial_sign_execute_payment(
         str(tmp_path / "payer.json"),
