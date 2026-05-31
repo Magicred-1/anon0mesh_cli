@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import importlib
-import os
 from pathlib import Path
-import re
 import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -52,29 +51,60 @@ def check_module(checks: Checks, module: str, label: str) -> None:
         checks.ok(f"{label} import")
 
 
-def read_config(checks: Checks, path: Path) -> str | None:
+def read_config(checks: Checks, path: Path) -> Mapping[str, object] | None:
     if not path.is_file():
         checks.fail(f"Reticulum config not found: {path}")
         return None
 
-    text = path.read_text()
+    try:
+        from RNS.vendor.configobj import ConfigObj, ConfigObjError
+    except ImportError as exc:
+        checks.fail(f"Reticulum config parser import failed: {exc}")
+        return None
+    try:
+        config = ConfigObj(str(path))
+    except (ConfigObjError, OSError) as exc:
+        checks.fail(f"Reticulum config could not be parsed: {path} ({exc})")
+        return None
+
     missing = [
         section for section in ("[reticulum]", "[interfaces]")
-        if section not in text
+        if section[1:-1] not in config
     ]
     if missing:
         checks.fail(f"Reticulum config missing sections: {', '.join(missing)}")
         return None
 
     checks.ok(f"Reticulum config: {path}")
-    return text
+    return config
 
 
-def check_optional_transports(checks: Checks, text: str | None, args: argparse.Namespace) -> None:
-    text = text or ""
-    has_ble = "BLEInterface" in text
-    has_rnode = "RNodeInterface" in text
-    has_meshtastic = "Meshtastic" in text
+def interface_enabled(config: Mapping[str, object]) -> bool:
+    value = config.get("interface_enabled", config.get("enabled", "no"))
+    return str(value).lower() in {"1", "true", "yes", "on"}
+
+
+def configured_interfaces(config: Mapping[str, object] | None) -> list[Mapping[str, object]]:
+    if config is None:
+        return []
+    interfaces = config.get("interfaces", {})
+    if not isinstance(interfaces, Mapping):
+        return []
+    return [
+        section for section in interfaces.values()
+        if isinstance(section, Mapping) and interface_enabled(section)
+    ]
+
+
+def check_optional_transports(
+    checks: Checks,
+    config: Mapping[str, object] | None,
+    args: argparse.Namespace,
+) -> None:
+    interfaces = configured_interfaces(config)
+    rnodes = [section for section in interfaces if section.get("type") == "RNodeInterface"]
+    has_ble = any(section.get("type") == "BLEInterface" for section in interfaces)
+    has_meshtastic = any("Meshtastic" in str(section.get("type", "")) for section in interfaces)
 
     if args.ble or has_ble:
         checks.fail(
@@ -82,14 +112,14 @@ def check_optional_transports(checks: Checks, text: str | None, args: argparse.N
             "a supported Reticulum BLEInterface"
         )
 
-    if args.rnode and not has_rnode:
-        checks.fail("RNode requested but no RNodeInterface exists in the Reticulum config")
+    if args.rnode and not rnodes:
+        checks.fail("RNode requested but no enabled RNodeInterface exists in the Reticulum config")
 
-    if has_rnode:
-        ports = re.findall(r"^\s*port\s*=\s*(\S+)\s*$", text, flags=re.MULTILINE)
-        if not ports:
+    for rnode in rnodes:
+        port = str(rnode.get("port", "")).strip()
+        if not port:
             checks.fail("RNodeInterface exists but no serial port is configured")
-        for port in ports:
+        else:
             if Path(port).exists():
                 checks.ok(f"RNode serial port: {port}")
             else:
@@ -138,8 +168,8 @@ def main() -> int:
     check_python(checks)
     check_module(checks, "RNS", "Reticulum")
     check_module(checks, "requests", "requests")
-    text = read_config(checks, config_file(args.config))
-    check_optional_transports(checks, text, args)
+    config = read_config(checks, config_file(args.config))
+    check_optional_transports(checks, config, args)
     if not args.skip_rpc:
         check_rpc(checks, args.rpc or SOLANA_ENDPOINTS[args.network])
 

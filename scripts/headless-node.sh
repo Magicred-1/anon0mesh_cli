@@ -22,11 +22,30 @@ if [[ -n "$RPC_URL" ]]; then
   preflight_args+=(--rpc "$RPC_URL")
 fi
 
+read_pid() {
+  [[ -f "$PID_FILE" ]] || return 1
+  local pid
+  pid="$(cat "$PID_FILE")"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$pid"
+}
+
 is_running() {
-  [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+  local pid command_line
+  pid="$(read_pid)" || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  command_line="$(ps -ww -p "$pid" -o args= 2>/dev/null)" || return 1
+  [[ "$command_line" == *"$SCRIPT_DIR/exit_node.py"* ]]
+}
+
+clear_stale_pid() {
+  if [[ -f "$PID_FILE" ]] && ! is_running; then
+    rm -f "$PID_FILE"
+  fi
 }
 
 start() {
+  clear_stale_pid
   if is_running; then
     echo "headless node already running (pid $(cat "$PID_FILE"))"
     return 0
@@ -48,6 +67,7 @@ start() {
 }
 
 status() {
+  clear_stale_pid
   if is_running; then
     echo "headless node running (pid $(cat "$PID_FILE"))"
     echo "logs: $LOG_FILE"
@@ -60,6 +80,7 @@ status() {
 
 stop() {
   if ! is_running; then
+    clear_stale_pid
     echo "headless node already stopped"
     return 0
   fi
