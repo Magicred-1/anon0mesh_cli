@@ -182,6 +182,8 @@ def decompress_response(data: bytes) -> bytes:
         raw += decompressor.flush(MAX_MESH_RESPONSE_BYTES + 1 - len(raw))
         if len(raw) > MAX_MESH_RESPONSE_BYTES:
             raise ValueError("Compressed response exceeds expanded size limit")
+        if not decompressor.eof or decompressor.unused_data:
+            raise ValueError("Compressed response is malformed")
         return raw
     return data
 

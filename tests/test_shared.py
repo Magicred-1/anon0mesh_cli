@@ -182,6 +182,18 @@ def test_decompress_response_rejects_oversized_uncompressed_payload():
         shared.decompress_response(b"x" * (shared.MAX_MESH_RESPONSE_BYTES + 1))
 
 
+def test_decompress_response_rejects_truncated_compressed_payload():
+    compressed = shared._COMPRESS_MAGIC + zlib.compress(b"payload" * 100)
+    with pytest.raises(ValueError, match="malformed"):
+        shared.decompress_response(compressed[:-1])
+
+
+def test_decompress_response_rejects_trailing_compressed_payload():
+    compressed = shared._COMPRESS_MAGIC + zlib.compress(b"payload") + b"trailing"
+    with pytest.raises(ValueError, match="malformed"):
+        shared.decompress_response(compressed)
+
+
 # ── quiet mode ─────────────────────────────────────────────────────────────────
 
 def test_log_info_visible_by_default(capsys):
