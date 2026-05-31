@@ -146,7 +146,7 @@ def _handle_cosign_transaction(params: list, req_id: int, count: int) -> bytes:
     """
     if not HAS_SOLDERS or beacon_cosign_keypair is None:
         return build_response(error="Beacon co-signing keypair not configured", req_id=req_id)
-    if not params or not isinstance(params[0], str):
+    if not isinstance(params, list) or not params or not isinstance(params[0], str):
         return build_response(error="cosignTransaction: params[0] must be a base64 tx", req_id=req_id)
 
     try:
