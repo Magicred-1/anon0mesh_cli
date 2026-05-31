@@ -292,18 +292,22 @@ class BeaconLink:
             log_info(f"[{self.label}] Re-announce received — identity refreshed for next retry")
 
     def request(self, payload: bytes, result_event: threading.Event,
-                result_holder: list, timeout: float) -> None:
+                result_holder: list, timeout: float, result_lock=None) -> None:
         if not self.active or self.link is None:
             return
+        result_lock = result_lock or threading.Lock()
 
         def on_response(receipt):
-            if receipt.response is not None and result_holder[0] is None:
+            if receipt.response is not None:
                 try:
-                    raw = decompress_response(bytes(receipt.response))
+                    raw    = decompress_response(bytes(receipt.response))
                     parsed = decode_rpc_response(raw)
-                    result_holder[0] = parsed
-                    result_holder[1] = self.label
-                    result_event.set()
+                    with result_lock:
+                        if result_holder[0] is not None:
+                            return
+                        result_holder[0] = parsed
+                        result_holder[1] = self.label
+                        result_event.set()
                 except Exception:
                     pass
 
@@ -467,8 +471,9 @@ class BeaconPool:
     def _race(self, links, payload, method):
         result_holder = [None, None]
         result_event  = threading.Event()
+        result_lock   = threading.Lock()
         for bl in links:
-            bl.request(payload, result_event, result_holder, self.request_timeout)
+            bl.request(payload, result_event, result_holder, self.request_timeout, result_lock)
         fired = result_event.wait(timeout=self.request_timeout + 5)
         if fired and result_holder[0] is not None:
             log_ok(f"Response from [{result_holder[1]}]  method={method}")

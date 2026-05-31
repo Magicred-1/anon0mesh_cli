@@ -546,6 +546,46 @@ class TestBeaconLinkRequest:
 
         assert result_holder[0]["result"] == "first"
 
+    def test_request_slower_decode_cannot_overwrite_faster_response(self):
+        slow = BeaconLink(VALID_HASH_HEX, label="slow")
+        fast = BeaconLink(VALID_HASH_HEX_2, label="fast")
+        slow_link = _make_established_link(slow)
+        fast_link = _make_established_link(fast)
+        result_holder = [None, None]
+        result_lock = threading.Lock()
+        event = threading.Event()
+        slow.request(b"payload", event, result_holder, 5.0, result_lock)
+        fast.request(b"payload", event, result_holder, 5.0, result_lock)
+        slow_callback = slow_link.request.call_args.kwargs["response_callback"]
+        fast_callback = fast_link.request.call_args.kwargs["response_callback"]
+        slow_entered = threading.Event()
+        release_slow = threading.Event()
+        real_decode = mesh.decode_rpc_response
+
+        def delayed_decode(raw):
+            parsed = real_decode(raw)
+            if parsed["result"] == "slow":
+                slow_entered.set()
+                release_slow.wait(timeout=5)
+            return parsed
+
+        def receipt(result):
+            value = MagicMock()
+            value.response = json.dumps({"jsonrpc": "2.0", "id": 1, "result": result}).encode()
+            return value
+
+        with patch.object(mesh, "decode_rpc_response", side_effect=delayed_decode):
+            slow_thread = threading.Thread(target=slow_callback, args=(receipt("slow"),))
+            slow_thread.start()
+            assert slow_entered.wait(timeout=5)
+            fast_callback(receipt("fast"))
+            release_slow.set()
+            slow_thread.join(timeout=5)
+
+        assert not slow_thread.is_alive()
+        assert result_holder[0]["result"] == "fast"
+        assert result_holder[1] == "fast"
+
     def test_request_handles_send_error(self):
         bl = BeaconLink(VALID_HASH_HEX)
         mock_link = _make_established_link(bl)
@@ -731,7 +771,7 @@ class TestBeaconPoolDispatch:
 
         rpc_result = {"jsonrpc": "2.0", "id": 1, "result": 12345}
 
-        def fake_request(payload, event, holder, timeout):
+        def fake_request(payload, event, holder, timeout, result_lock):
             holder[0] = rpc_result
             holder[1] = "A"
             event.set()
@@ -747,7 +787,7 @@ class TestBeaconPoolDispatch:
         pool.add(VALID_HASH_HEX, connect=False)
         bl = pool.all_links()[0]
         _make_established_link(bl)
-        bl.request = lambda p, e, h, t: None  # never fires event
+        bl.request = lambda p, e, h, t, result_lock: None  # never fires event
 
         result = pool.call("getSlot")
         assert result is None
