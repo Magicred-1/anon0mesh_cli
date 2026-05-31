@@ -417,7 +417,12 @@ def partial_sign_execute_payment(
     try:
         pub_key_hex = enc["pubkey_hex"]
         nonce_raw = enc["nonce_bn"]
-        if not isinstance(nonce_raw, str) or not nonce_raw.isdecimal():
+        if (
+            not isinstance(nonce_raw, str)
+            or not nonce_raw.isascii()
+            or not nonce_raw.isdecimal()
+            or len(nonce_raw) > 39
+        ):
             raise ValueError("nonce_bn must be an unsigned decimal string")
         nonce_bn = int(nonce_raw)
         # Rescue ciphertext for the amount — 32-byte field element passed to Arcium

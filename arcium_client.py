@@ -67,6 +67,36 @@ POLL_INTERVAL          = 2.0
 POLL_TIMEOUT           = 120.0
 SHIM_PATH              = Path(__file__).parent / "rescue_shim.mjs"
 _MAX_U32               = (1 << 32) - 1
+_MAX_U128              = (1 << 128) - 1
+_MAX_FIELD_VALUE       = (1 << 256) - 1
+
+
+def _is_fixed_hex(value: object, byte_length: int) -> bool:
+    if not isinstance(value, str) or len(value) != byte_length * 2:
+        return False
+    try:
+        return len(bytes.fromhex(value)) == byte_length
+    except ValueError:
+        return False
+
+
+def _is_byte_array(value: object, byte_length: int) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == byte_length
+        and all(isinstance(item, int) and not isinstance(item, bool) and 0 <= item <= 255 for item in value)
+    )
+
+
+def _is_bounded_decimal(value: object, maximum: int) -> bool:
+    if (
+        not isinstance(value, str)
+        or not value.isascii()
+        or not value.isdecimal()
+        or len(value) > len(str(maximum))
+    ):
+        return False
+    return int(value) <= maximum
 
 
 # ── Shim helpers ───────────────────────────────────────────────────────────────
@@ -111,7 +141,7 @@ def rescue_keygen() -> tuple[str, str]:
     data = _run_shim("keygen")
     private_key = data.get("privkey_hex")
     public_key = data.get("pubkey_hex")
-    if not isinstance(private_key, str) or not private_key or not isinstance(public_key, str) or not public_key:
+    if not _is_fixed_hex(private_key, 32) or not _is_fixed_hex(public_key, 32):
         raise ValueError("shim keygen returned invalid keys")
     return private_key, public_key
 
@@ -120,14 +150,26 @@ def rescue_encrypt(mxe_pubkey_hex: str, values: list[int], nonce_hex: str | None
     args = ["encrypt", mxe_pubkey_hex]
     if nonce_hex:
         args.append(nonce_hex)
-    return _run_shim(*args, stdin_data=json.dumps(values))
+    data = _run_shim(*args, stdin_data=json.dumps(values))
+    ciphertexts = data.get("ciphertexts")
+    if (
+        not isinstance(ciphertexts, list)
+        or len(ciphertexts) != len(values)
+        or any(not _is_byte_array(ciphertext, 32) for ciphertext in ciphertexts)
+        or not _is_fixed_hex(data.get("pubkey_hex"), 32)
+        or not _is_fixed_hex(data.get("nonce_hex"), 16)
+        or not _is_bounded_decimal(data.get("nonce_bn"), _MAX_U128)
+        or not _is_fixed_hex(data.get("shared_secret_hex"), 32)
+    ):
+        raise ValueError("shim encrypt returned invalid payload")
+    return data
 
 
 def rescue_decrypt(shared_secret_hex: str, ciphertexts: list[list[int]], nonce_hex: str) -> list[int]:
     # shared_secret_hex is sensitive — pass via stdin, not as a CLI arg
     data = _run_shim("decrypt", json.dumps(ciphertexts), nonce_hex, stdin_data=shared_secret_hex)
     values = data.get("values")
-    if not isinstance(values, list) or any(not isinstance(value, str) or not value.isdecimal() for value in values):
+    if not isinstance(values, list) or any(not _is_bounded_decimal(value, _MAX_FIELD_VALUE) for value in values):
         raise ValueError("shim decrypt returned invalid values")
     return [int(value) for value in values]
 
@@ -135,7 +177,7 @@ def rescue_decrypt(shared_secret_hex: str, ciphertexts: list[list[int]], nonce_h
 def rescue_shared_secret(privkey_hex: str, mxe_pubkey_hex: str) -> str:
     # privkey_hex is sensitive — pass via stdin, not as a CLI arg
     shared_secret = _run_shim("shared_secret", mxe_pubkey_hex, stdin_data=privkey_hex).get("shared_secret_hex")
-    if not isinstance(shared_secret, str) or not shared_secret:
+    if not _is_fixed_hex(shared_secret, 32):
         raise ValueError("shim shared_secret returned an invalid key")
     return shared_secret
 

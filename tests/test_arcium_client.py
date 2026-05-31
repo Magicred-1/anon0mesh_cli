@@ -23,6 +23,17 @@ def _proc(stdout: str, returncode: int = 0, stderr: str = "") -> MagicMock:
     return m
 
 
+def _encrypt_payload() -> dict:
+    return {
+        "ok": True,
+        "ciphertexts": [[1] * 32],
+        "pubkey_hex": "ab" * 32,
+        "nonce_hex": "cd" * 16,
+        "nonce_bn": "123",
+        "shared_secret_hex": "ef" * 32,
+    }
+
+
 # ── _run_shim ─────────────────────────────────────────────────────────────────
 
 def test_run_shim_missing_file(tmp_path):
@@ -129,11 +140,11 @@ def test_run_shim_no_stdin_when_not_provided(mock_run, tmp_path):
 
 @patch("arcium_client._run_shim")
 def test_rescue_keygen_calls_keygen(mock_shim):
-    mock_shim.return_value = {"ok": True, "privkey_hex": "aabb", "pubkey_hex": "ccdd"}
+    mock_shim.return_value = {"ok": True, "privkey_hex": "aa" * 32, "pubkey_hex": "cc" * 32}
     priv, pub = arcium_client.rescue_keygen()
     mock_shim.assert_called_once_with("keygen")
-    assert priv == "aabb"
-    assert pub == "ccdd"
+    assert priv == "aa" * 32
+    assert pub == "cc" * 32
 
 
 @patch("arcium_client._run_shim")
@@ -147,10 +158,7 @@ def test_rescue_keygen_rejects_invalid_keys(mock_shim):
 
 @patch("arcium_client._run_shim")
 def test_rescue_encrypt_passes_mxe_pubkey_and_values_via_stdin(mock_shim):
-    mock_shim.return_value = {
-        "ok": True, "ciphertexts": [[1, 2]], "pubkey_hex": "ab",
-        "nonce_hex": "cd", "nonce_bn": "123", "shared_secret_hex": "ef",
-    }
+    mock_shim.return_value = _encrypt_payload()
     arcium_client.rescue_encrypt("mxe_pubkey_hex", [999])
     args = mock_shim.call_args[0]
     assert args[0] == "encrypt"
@@ -161,10 +169,7 @@ def test_rescue_encrypt_passes_mxe_pubkey_and_values_via_stdin(mock_shim):
 
 @patch("arcium_client._run_shim")
 def test_rescue_encrypt_with_nonce_appends_arg(mock_shim):
-    mock_shim.return_value = {
-        "ok": True, "ciphertexts": [], "pubkey_hex": "ab",
-        "nonce_hex": "aabbcc", "nonce_bn": "0", "shared_secret_hex": "ef",
-    }
+    mock_shim.return_value = _encrypt_payload()
     arcium_client.rescue_encrypt("mxe", [1], nonce_hex="aabbcc")
     args = mock_shim.call_args[0]
     assert args == ("encrypt", "mxe", "aabbcc")
@@ -173,14 +178,28 @@ def test_rescue_encrypt_with_nonce_appends_arg(mock_shim):
 
 @patch("arcium_client._run_shim")
 def test_rescue_encrypt_without_nonce_omits_arg(mock_shim):
-    mock_shim.return_value = {
-        "ok": True, "ciphertexts": [], "pubkey_hex": "ab",
-        "nonce_hex": "cd", "nonce_bn": "0", "shared_secret_hex": "ef",
-    }
+    mock_shim.return_value = _encrypt_payload()
     arcium_client.rescue_encrypt("mxe", [1])
     args = mock_shim.call_args[0]
     assert args == ("encrypt", "mxe")
     assert json.loads(mock_shim.call_args.kwargs["stdin_data"]) == [1]
+
+
+@pytest.mark.parametrize("field, value", [
+    ("ciphertexts", [[1] * 31]),
+    ("pubkey_hex", "ab" * 31),
+    ("nonce_hex", "cd" * 15),
+    ("nonce_bn", "9" * 100_000),
+    ("nonce_bn", "١"),
+    ("shared_secret_hex", "ef" * 31),
+])
+@patch("arcium_client._run_shim")
+def test_rescue_encrypt_rejects_invalid_payload(mock_shim, field, value):
+    payload = _encrypt_payload()
+    payload[field] = value
+    mock_shim.return_value = payload
+    with pytest.raises(ValueError, match="invalid payload"):
+        arcium_client.rescue_encrypt("mxe", [1])
 
 
 # ── rescue_decrypt ────────────────────────────────────────────────────────────
@@ -211,7 +230,7 @@ def test_rescue_decrypt_passes_ciphertexts_and_nonce_as_args(mock_shim):
     assert args[2] == "my_nonce"
 
 
-@pytest.mark.parametrize("values", [None, "42", [True], ["-1"], [{}]])
+@pytest.mark.parametrize("values", [None, "42", [True], ["-1"], [{}], ["9" * 100_000], ["١"]])
 @patch("arcium_client._run_shim")
 def test_rescue_decrypt_rejects_invalid_values(mock_shim, values):
     mock_shim.return_value = {"ok": True, "values": values}
@@ -223,14 +242,14 @@ def test_rescue_decrypt_rejects_invalid_values(mock_shim, values):
 
 @patch("arcium_client._run_shim")
 def test_rescue_shared_secret_passes_privkey_via_stdin(mock_shim):
-    mock_shim.return_value = {"ok": True, "shared_secret_hex": "deadbeef"}
+    mock_shim.return_value = {"ok": True, "shared_secret_hex": "de" * 32}
     arcium_client.rescue_shared_secret("my_privkey", "mxe_pubkey")
     assert mock_shim.call_args[1]["stdin_data"] == "my_privkey"
 
 
 @patch("arcium_client._run_shim")
 def test_rescue_shared_secret_passes_mxe_pubkey_as_arg(mock_shim):
-    mock_shim.return_value = {"ok": True, "shared_secret_hex": "deadbeef"}
+    mock_shim.return_value = {"ok": True, "shared_secret_hex": "de" * 32}
     arcium_client.rescue_shared_secret("privkey", "mxe_pubkey")
     args = mock_shim.call_args[0]
     assert args[0] == "shared_secret"
@@ -239,9 +258,9 @@ def test_rescue_shared_secret_passes_mxe_pubkey_as_arg(mock_shim):
 
 @patch("arcium_client._run_shim")
 def test_rescue_shared_secret_returns_hex(mock_shim):
-    mock_shim.return_value = {"ok": True, "shared_secret_hex": "cafebabe"}
+    mock_shim.return_value = {"ok": True, "shared_secret_hex": "ca" * 32}
     result = arcium_client.rescue_shared_secret("priv", "pub")
-    assert result == "cafebabe"
+    assert result == "ca" * 32
 
 
 @patch("arcium_client._run_shim")

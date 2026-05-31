@@ -586,6 +586,8 @@ def test_partial_sign_execute_payment_invalid_encryption_payload(mock_encrypt, m
     {"ciphertexts": [[0] * 32], "pubkey_hex": "00" * 31, "nonce_bn": "0"},
     {"ciphertexts": [[0] * 32], "pubkey_hex": "00" * 32, "nonce_bn": True},
     {"ciphertexts": [[0] * 32], "pubkey_hex": "00" * 32, "nonce_bn": "-1"},
+    {"ciphertexts": [[0] * 32], "pubkey_hex": "00" * 32, "nonce_bn": "9" * 100_000},
+    {"ciphertexts": [[0] * 32], "pubkey_hex": "00" * 32, "nonce_bn": "١"},
 ])
 @patch("arcium_client._run_shim")
 @patch("arcium_client.rescue_encrypt")
