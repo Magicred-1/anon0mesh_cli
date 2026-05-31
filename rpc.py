@@ -71,17 +71,17 @@ def confidential_get_balance(address: str) -> None:
     """
     Fetch SOL balance via Arcium MPC — the beacon never sees the address or balance.
     Requires ARCIUM_MXE_PUBKEY_HEX in .env and arcium_client.py present.
-    Falls back to plain get_balance if Arcium is unavailable.
+    Never falls back automatically: a plain query would disclose the address.
     """
     if not HAS_ARCIUM:
-        log_warn("arcium_client.py not found — falling back to plain balance")
-        get_balance(address)
+        log_warn("arcium_client.py not found — confidential balance unavailable")
+        log_warn("Use the plain balance command explicitly only if address disclosure is acceptable")
         return
 
     mxe_pubkey_hex = os.getenv("ARCIUM_MXE_PUBKEY_HEX", "").strip()
     if not mxe_pubkey_hex:
-        log_warn("ARCIUM_MXE_PUBKEY_HEX not set — falling back to plain balance")
-        get_balance(address)
+        log_warn("ARCIUM_MXE_PUBKEY_HEX not set — confidential balance unavailable")
+        log_warn("Use the plain balance command explicitly only if address disclosure is acceptable")
         return
 
     try:
@@ -98,20 +98,34 @@ def confidential_get_balance(address: str) -> None:
         log_err(f"Encryption failed: {exc}")
         return
 
+    try:
+        encrypted_address = enc["ciphertexts"][0]
+        ephemeral_pubkey = enc["pubkey_hex"]
+        nonce = int(enc["nonce_bn"])
+    except (KeyError, IndexError, TypeError, ValueError):
+        log_err("Invalid Arcium encryption payload")
+        return
+
     resp = rpc_call("getBalance", [{
-        "enc_address":   enc["ciphertexts"][0],
-        "ephem_pub":     enc["pubkey_hex"],
-        "nonce":         int(enc["nonce_bn"]),
+        "enc_address":   encrypted_address,
+        "ephem_pub":     ephemeral_pubkey,
+        "nonce":         nonce,
         "comp_def_name": "payment_stats",
     }])
 
     if resp is None:
+        return
+    if not isinstance(resp, dict):
+        log_err("Invalid Arcium response: expected object")
         return
     if resp.get("status") == "error":
         log_err(f"Arcium error: {resp.get('message', '?')}")
         return
 
     r = resp.get("result", resp)
+    if not isinstance(r, dict):
+        log_err("Invalid Arcium result: expected object")
+        return
     if r.get("status") == "error":
         log_err(f"Arcium error: {r.get('message', '?')}")
         return
@@ -131,8 +145,7 @@ def confidential_get_balance(address: str) -> None:
         print()
     except Exception as exc:
         log_err(f"Decryption failed: {exc}")
-        log_warn("Falling back to plain balance check")
-        get_balance(address)
+        log_warn("Plain fallback disabled to protect address privacy")
 
 
 def get_slot():

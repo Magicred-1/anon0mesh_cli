@@ -92,6 +92,87 @@ def test_get_balance_malformed_result(mock_pool, capsys):
     assert "Unexpected getBalance response" in capsys.readouterr().out
 
 
+# ── confidential_get_balance ──────────────────────────────────────────────────
+
+_VALID_ADDRESS = "11111111111111111111111111111111"
+_MXE_PUBKEY = "00" * 32
+
+
+def test_confidential_balance_never_plain_falls_back_without_arcium(monkeypatch, capsys):
+    plain_balance = MagicMock()
+    monkeypatch.setattr(rpc, "HAS_ARCIUM", False)
+    monkeypatch.setattr(rpc, "get_balance", plain_balance)
+
+    rpc.confidential_get_balance(_VALID_ADDRESS)
+
+    plain_balance.assert_not_called()
+    assert "address disclosure" in capsys.readouterr().out
+
+
+def test_confidential_balance_never_plain_falls_back_without_mxe_key(monkeypatch, capsys):
+    plain_balance = MagicMock()
+    monkeypatch.setattr(rpc, "HAS_ARCIUM", True)
+    monkeypatch.delenv("ARCIUM_MXE_PUBKEY_HEX", raising=False)
+    monkeypatch.setattr(rpc, "get_balance", plain_balance)
+
+    rpc.confidential_get_balance(_VALID_ADDRESS)
+
+    plain_balance.assert_not_called()
+    assert "address disclosure" in capsys.readouterr().out
+
+
+def test_confidential_balance_rejects_invalid_encryption_payload(monkeypatch, mock_pool, capsys):
+    monkeypatch.setattr(rpc, "HAS_ARCIUM", True)
+    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", _MXE_PUBKEY)
+    monkeypatch.setattr(rpc, "rescue_encrypt", lambda *_: {})
+
+    rpc.confidential_get_balance(_VALID_ADDRESS)
+
+    mock_pool.call.assert_not_called()
+    assert "Invalid Arcium encryption payload" in capsys.readouterr().out
+
+
+def test_confidential_balance_rejects_invalid_result_shape(monkeypatch, mock_pool, capsys):
+    monkeypatch.setattr(rpc, "HAS_ARCIUM", True)
+    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", _MXE_PUBKEY)
+    monkeypatch.setattr(rpc, "rescue_encrypt", lambda *_: {
+        "ciphertexts": [[0] * 32],
+        "pubkey_hex": "00" * 32,
+        "nonce_bn": "0",
+    })
+    mock_pool.call.return_value = {"result": "not-an-object"}
+
+    rpc.confidential_get_balance(_VALID_ADDRESS)
+
+    assert "Invalid Arcium result: expected object" in capsys.readouterr().out
+
+
+def test_confidential_balance_never_plain_falls_back_after_decrypt_error(monkeypatch, mock_pool, capsys):
+    plain_balance = MagicMock()
+    monkeypatch.setattr(rpc, "HAS_ARCIUM", True)
+    monkeypatch.setenv("ARCIUM_MXE_PUBKEY_HEX", _MXE_PUBKEY)
+    monkeypatch.setattr(rpc, "get_balance", plain_balance)
+    monkeypatch.setattr(rpc, "rescue_encrypt", lambda *_: {
+        "ciphertexts": [[0] * 32],
+        "pubkey_hex": "00" * 32,
+        "nonce_bn": "0",
+        "shared_secret_hex": "00" * 32,
+    })
+    monkeypatch.setattr(rpc, "rescue_shared_secret", MagicMock(side_effect=ValueError("bad response")))
+    mock_pool.call.return_value = {
+        "result": {
+            "mxe_pubkey_hex": "00" * 32,
+            "enc_balance": [0] * 32,
+            "nonce_hex": "00" * 16,
+        }
+    }
+
+    rpc.confidential_get_balance(_VALID_ADDRESS)
+
+    plain_balance.assert_not_called()
+    assert "Plain fallback disabled to protect address privacy" in capsys.readouterr().out
+
+
 # ── get_slot ───────────────────────────────────────────────────────────────────
 
 def test_get_slot_ok(mock_pool, capsys):
