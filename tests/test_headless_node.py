@@ -31,3 +31,30 @@ def test_stop_clears_stale_pid_without_signalling_unrelated_process(tmp_path):
     finally:
         sleeper.terminate()
         sleeper.wait(timeout=3)
+
+
+def test_start_failure_clears_pid_file(tmp_path):
+    fake_python = tmp_path / "python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "[[ \"$1\" == *preflight.py ]] && exit 0\n"
+        "exit 1\n"
+    )
+    fake_python.chmod(0o755)
+    env = {
+        **os.environ,
+        "ANONMESH_PYTHON": str(fake_python),
+        "ANONMESH_STATE_DIR": str(tmp_path / "state"),
+    }
+
+    result = subprocess.run(
+        [str(LAUNCHER), "start"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert "failed to start" in result.stderr
+    assert not (tmp_path / "state" / "headless-node.pid").exists()

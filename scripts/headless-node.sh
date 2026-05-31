@@ -58,6 +58,7 @@ start() {
   sleep 1
 
   if ! is_running; then
+    rm -f "$PID_FILE"
     echo "headless node failed to start; inspect $LOG_FILE" >&2
     return 1
   fi
