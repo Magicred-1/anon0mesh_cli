@@ -287,6 +287,10 @@ def forward_to_solana(raw_request: bytes) -> bytes:
         log_err(f"Failed to parse RPC payload: {exc}")
         return build_response(error=f"Invalid JSON payload: {exc}")
 
+    if not isinstance(req, dict):
+        log_err("Failed to parse RPC payload: expected a JSON object")
+        return build_response(error="Invalid JSON-RPC payload: expected object")
+
     method = req.get("method", "?")
     req_id = req.get("id", 1)
     params = req.get("params", [])

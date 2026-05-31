@@ -64,7 +64,7 @@ def build_response(result: Any = None, error: str | None = None, req_id: int = 1
     return json.dumps(payload).encode("utf-8")
 
 
-def decode_json(raw: bytes) -> dict:
+def decode_json(raw: bytes) -> Any:
     """Safely decode JSON bytes."""
     return json.loads(raw.decode("utf-8"))
 

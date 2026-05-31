@@ -90,6 +90,9 @@ def forward_rpc(raw_request: bytes) -> tuple[bytes, str, float]:
     except Exception as exc:
         return build_response(error=f"Invalid JSON: {exc}"), "?", 0.0
 
+    if not isinstance(req, dict):
+        return build_response(error="Invalid JSON-RPC payload: expected object"), "?", 0.0
+
     method = req.get("method", "?")
     req_id = req.get("id", 1)
 
