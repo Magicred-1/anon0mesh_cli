@@ -1,5 +1,6 @@
 venv/
 .venv/
+.venv-test/
 config/storage/
 __pycache__/
 node_modules/
@@ -10,6 +11,7 @@ run_client.sh
 wallet.json
 wallet_*.json
 nonce_*.json
-config/*/storage/
-config/*/interfaces/
+config/**/storage/
+config/**/interfaces/
+config/**/anonmesh_exit_identity
 *.identity

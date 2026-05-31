@@ -1,0 +1,13 @@
+[reticulum]
+  enable_transport      = True
+  share_instance        = Yes
+  shared_instance_port  = 37430
+  instance_control_port = 37431
+
+[interfaces]
+
+  [[TCP Bridge Server]]
+    type        = TCPServerInterface
+    enabled     = yes
+    listen_ip   = 127.0.0.1
+    listen_port = 4243
