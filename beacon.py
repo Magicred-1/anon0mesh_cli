@@ -12,7 +12,7 @@ Usage
 -----
   python beacon.py                          # devnet, auto config
   python beacon.py --network mainnet        # mainnet-beta
-  python beacon.py --rpc https://my.node   # custom RPC endpoint
+  SOLANA_RPC_URL=https://my.node python beacon.py  # custom RPC endpoint
   python beacon.py --config ~/.reticulum   # custom RNS config dir
 
 The beacon prints its DESTINATION HASH on startup.
@@ -79,7 +79,7 @@ RNS.Transport.synthesize_tunnel = staticmethod(_safe_synthesize_tunnel)
 from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT,
-    decode_json, build_response, compress_response,
+    decode_json, build_response, compress_response, redact_url,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
     BOLD, CYAN, GREEN, RESET, DIM,
 )
@@ -266,11 +266,20 @@ def forward_plain_rpc(req: dict, req_id: int, count: int, method: str) -> bytes:
         log_err(f"[#{count}] Solana RPC timeout  method={method}")
         return build_response(error="Solana RPC timeout", req_id=req_id)
     except requests.exceptions.ConnectionError as exc:
-        log_err(f"[#{count}] Solana connection error: {exc}")
-        return build_response(error=f"Solana connection error: {exc}", req_id=req_id)
+        log_err(
+            f"[#{count}] Solana connection error: {type(exc).__name__} "
+            f"contacting {redact_url(rpc_endpoint)}"
+        )
+        return build_response(error="Solana RPC connection error", req_id=req_id)
+    except requests.exceptions.RequestException as exc:
+        log_err(
+            f"[#{count}] Solana request error: {type(exc).__name__} "
+            f"contacting {redact_url(rpc_endpoint)}"
+        )
+        return build_response(error="Solana RPC request failed", req_id=req_id)
     except Exception as exc:
-        log_err(f"[#{count}] Unexpected error: {exc}")
-        return build_response(error=str(exc), req_id=req_id)
+        log_err(f"[#{count}] Unexpected forwarding error: {type(exc).__name__}")
+        return build_response(error="Solana RPC forwarding failed", req_id=req_id)
 
 
 def forward_to_solana(raw_request: bytes) -> bytes:
@@ -529,6 +538,7 @@ def setup_beacon(config_path: str | None, network: str, custom_rpc: str | None, 
     global beacon_destination, rpc_endpoint
 
     # ── Choose RPC endpoint ────────────────────────────────────────────────────
+    custom_rpc = custom_rpc or os.getenv("SOLANA_RPC_URL")
     if custom_rpc:
         rpc_endpoint = custom_rpc
     elif network in SOLANA_ENDPOINTS:
@@ -537,7 +547,7 @@ def setup_beacon(config_path: str | None, network: str, custom_rpc: str | None, 
         log_err(f"Unknown network: {network}. Choose from {list(SOLANA_ENDPOINTS.keys())}")
         sys.exit(1)
 
-    log_info(f"Solana RPC endpoint: {rpc_endpoint}")
+    log_info(f"Solana RPC endpoint: {redact_url(rpc_endpoint)}")
 
     # ── Start Reticulum + load beacon identity ─────────────────────────────────
     _init_reticulum(config_path)
@@ -570,7 +580,7 @@ def setup_beacon(config_path: str | None, network: str, custom_rpc: str | None, 
     print(f"{BOLD}{CYAN}┌─ BEACON READY ─────────────────────────────────────────────┐{RESET}")
     print(f"{BOLD}{CYAN}│{RESET}  Destination hash:  {GREEN}{BOLD}{dest_hash}{RESET}")
     print(f"{BOLD}{CYAN}│{RESET}  Network:           {network}")
-    print(f"{BOLD}{CYAN}│{RESET}  RPC endpoint:      {rpc_endpoint}")
+    print(f"{BOLD}{CYAN}│{RESET}  RPC endpoint:      {redact_url(rpc_endpoint)}")
     print(f"{BOLD}{CYAN}│{RESET}  Reticulum config:  {config_path or '~/.reticulum (default)'}")
     print(f"{BOLD}{CYAN}└────────────────────────────────────────────────────────────┘{RESET}")
     print()
@@ -614,7 +624,7 @@ def main():
     parser.add_argument(
         "--rpc",
         default=None,
-        help="Custom Solana RPC URL (overrides --network)",
+        help="Custom Solana RPC URL (overrides --network; prefer SOLANA_RPC_URL for credentials)",
     )
     parser.add_argument(
         "--announce-interval", "-a",

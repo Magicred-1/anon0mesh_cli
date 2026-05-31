@@ -529,10 +529,10 @@ RPC_URL=""               # leave empty to use default public endpoint
 ANNOUNCE_INTERVAL=300    # seconds between re-announces after burst phase
 
 # ── Build args ─────────────────────────────────────────────────────────────
-ARGS="--network \$NETWORK --announce-interval \$ANNOUNCE_INTERVAL"
-[[ -n "\$RPC_URL" ]] && ARGS="\$ARGS --rpc \$RPC_URL"
+ARGS=(--network "\$NETWORK" --announce-interval "\$ANNOUNCE_INTERVAL")
+[[ -n "\$RPC_URL" ]] && export SOLANA_RPC_URL="\$RPC_URL"
 
-exec python "\$SCRIPT_DIR/beacon.py" \$ARGS "\$@"
+exec python "\$SCRIPT_DIR/beacon.py" "\${ARGS[@]}" "\$@"
 LAUNCHER
   chmod +x "$SCRIPT_DIR/run_beacon.sh"
   log_ok "run_beacon.sh created"

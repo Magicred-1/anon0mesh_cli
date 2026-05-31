@@ -32,6 +32,17 @@ const SIGN_PDA = signPdaPubkey.toBase58();
 const RPC_URL     = process.env.ARCIUM_RPC_URL || "https://api.devnet.solana.com";
 const MINT        = process.argv[2] || "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 
+function redactUrl(raw) {
+    try {
+        const url = new URL(raw);
+        const sensitive = url.username || url.password || url.pathname !== "/"
+            || url.search || url.hash;
+        return `${url.protocol}//${url.host}${sensitive ? "/..." : ""}`;
+    } catch {
+        return "<redacted-rpc-url>";
+    }
+}
+
 const connection  = new Connection(RPC_URL, "confirmed");
 const progPubkey  = new PublicKey(PROGRAM_ID);
 const mintPubkey  = new PublicKey(MINT);
@@ -61,7 +72,7 @@ const checks = {
 };
 
 console.log(`\nProgram : ${PROGRAM_ID}`);
-console.log(`RPC     : ${RPC_URL}`);
+console.log(`RPC     : ${redactUrl(RPC_URL)}`);
 console.log(`Mint    : ${MINT}\n`);
 
 let allGood = true;

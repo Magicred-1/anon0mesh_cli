@@ -13,7 +13,7 @@ and as the internet-facing half of a two-node LoRa deployment.
 Usage:
   python scripts/exit_node.py                        # devnet, default config
   python scripts/exit_node.py --network mainnet      # mainnet-beta
-  python scripts/exit_node.py --rpc https://my.node  # custom RPC
+  ANONMESH_RPC_URL=https://my.node python scripts/exit_node.py  # custom RPC
   python scripts/exit_node.py --config /path/to/conf # custom Reticulum config dir
 """
 from __future__ import annotations
@@ -39,7 +39,7 @@ except ImportError:
 from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT,
-    decode_json, build_response, compress_response,
+    decode_json, build_response, compress_response, redact_url,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
     BOLD, CYAN, GREEN, RESET, DIM,
 )
@@ -133,12 +133,22 @@ def forward_rpc(raw_request: bytes) -> tuple[bytes, str, float]:
         return build_response(error="Solana RPC timeout", req_id=req_id), method, rtt_ms
     except requests.exceptions.ConnectionError as exc:
         rtt_ms = (time.monotonic() - t0) * 1000
-        log_err(f"[#{count}] ← {method}  connection error: {exc}")
-        return build_response(error=f"Connection error: {exc}", req_id=req_id), method, rtt_ms
+        log_err(
+            f"[#{count}] ← {method}  connection error: {type(exc).__name__} "
+            f"contacting {redact_url(rpc_endpoint)}"
+        )
+        return build_response(error="Solana RPC connection error", req_id=req_id), method, rtt_ms
+    except requests.exceptions.RequestException as exc:
+        rtt_ms = (time.monotonic() - t0) * 1000
+        log_err(
+            f"[#{count}] ← {method}  request error: {type(exc).__name__} "
+            f"contacting {redact_url(rpc_endpoint)}"
+        )
+        return build_response(error="Solana RPC request failed", req_id=req_id), method, rtt_ms
     except Exception as exc:
         rtt_ms = (time.monotonic() - t0) * 1000
-        log_err(f"[#{count}] ← {method}  error: {exc}")
-        return build_response(error=str(exc), req_id=req_id), method, rtt_ms
+        log_err(f"[#{count}] ← {method}  forwarding error: {type(exc).__name__}")
+        return build_response(error="Solana RPC forwarding failed", req_id=req_id), method, rtt_ms
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -235,6 +245,7 @@ def setup_exit_node(config_path: str | None, network: str, custom_rpc: str | Non
     global exit_identity, exit_destination, rpc_endpoint, start_time
 
     # ── RPC endpoint ──────────────────────────────────────────────────────────
+    custom_rpc = custom_rpc or os.getenv("ANONMESH_RPC_URL")
     if custom_rpc:
         rpc_endpoint = custom_rpc
     elif network in SOLANA_ENDPOINTS:
@@ -243,7 +254,7 @@ def setup_exit_node(config_path: str | None, network: str, custom_rpc: str | Non
         log_err(f"Unknown network: {network}")
         sys.exit(1)
 
-    log_info(f"Solana RPC: {rpc_endpoint}")
+    log_info(f"Solana RPC: {redact_url(rpc_endpoint)}")
 
     # ── Reticulum ─────────────────────────────────────────────────────────────
     RNS.Reticulum(config_path)
@@ -290,7 +301,7 @@ def setup_exit_node(config_path: str | None, network: str, custom_rpc: str | Non
     print(f"{BOLD}{CYAN}┌─ EXIT NODE READY ──────────────────────────────────────────┐{RESET}")
     print(f"{BOLD}{CYAN}│{RESET}  Destination hash:  {GREEN}{BOLD}{dest_hash}{RESET}")
     print(f"{BOLD}{CYAN}│{RESET}  Network:           {network}")
-    print(f"{BOLD}{CYAN}│{RESET}  RPC endpoint:      {rpc_endpoint}")
+    print(f"{BOLD}{CYAN}│{RESET}  RPC endpoint:      {redact_url(rpc_endpoint)}")
     print(f"{BOLD}{CYAN}│{RESET}  Config:            {config_path or '~/.reticulum (default)'}")
     print(f"{BOLD}{CYAN}└────────────────────────────────────────────────────────────┘{RESET}")
     print()
@@ -316,7 +327,7 @@ def main():
                         choices=list(SOLANA_ENDPOINTS.keys()),
                         help="Solana network (default: devnet)")
     parser.add_argument("--rpc", default=None,
-                        help="Custom Solana RPC URL (overrides --network)")
+                        help="Custom RPC URL (prefer ANONMESH_RPC_URL for credentials)")
     parser.add_argument("--announce-interval", "-a", default=300, type=int,
                         metavar="SECONDS", help="Re-announce interval (default: 300s)")
     args = parser.parse_args()

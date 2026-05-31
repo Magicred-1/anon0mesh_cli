@@ -5,13 +5,14 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping
 import importlib
+import os
 from pathlib import Path
 import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from shared import SOLANA_ENDPOINTS
+from shared import SOLANA_ENDPOINTS, redact_url
 
 
 class Checks:
@@ -130,6 +131,7 @@ def check_optional_transports(
 
 
 def check_rpc(checks: Checks, rpc_url: str) -> None:
+    display_url = redact_url(rpc_url)
     try:
         import requests
 
@@ -144,16 +146,16 @@ def check_rpc(checks: Checks, rpc_url: str) -> None:
             checks.fail(f"Solana RPC returned unexpected getHealth response: {body}")
             return
     except Exception as exc:
-        checks.fail(f"Solana RPC unreachable: {rpc_url} ({exc})")
+        checks.fail(f"Solana RPC unreachable: {display_url} ({type(exc).__name__})")
     else:
-        checks.ok(f"Solana RPC reachable: {rpc_url}")
+        checks.ok(f"Solana RPC reachable: {display_url}")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", "-c", default=None, help="Reticulum config directory")
     parser.add_argument("--network", "-n", choices=sorted(SOLANA_ENDPOINTS), default="devnet")
-    parser.add_argument("--rpc", default=None, help="Custom Solana RPC URL")
+    parser.add_argument("--rpc", default=None, help="Custom RPC URL (prefer ANONMESH_RPC_URL for credentials)")
     parser.add_argument("--skip-rpc", action="store_true", help="Skip the Solana RPC reachability check")
     parser.add_argument("--ble", action="store_true", help="Check the experimental desktop BLE path")
     parser.add_argument("--rnode", action="store_true", help="Require an RNodeInterface in the config")
@@ -171,7 +173,7 @@ def main() -> int:
     config = read_config(checks, config_file(args.config))
     check_optional_transports(checks, config, args)
     if not args.skip_rpc:
-        check_rpc(checks, args.rpc or SOLANA_ENDPOINTS[args.network])
+        check_rpc(checks, args.rpc or os.getenv("ANONMESH_RPC_URL") or SOLANA_ENDPOINTS[args.network])
 
     if checks.failures:
         print(f"\npreflight failed: {checks.failures} check(s)")

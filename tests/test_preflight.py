@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from unittest.mock import patch
 
 from RNS.vendor.configobj import ConfigObj
+import requests
 
-from scripts.preflight import Checks, check_optional_transports
+from scripts.preflight import Checks, check_optional_transports, check_rpc
 
 
 def args(**overrides) -> Namespace:
@@ -81,3 +83,18 @@ def test_rnode_flag_requires_enabled_interface():
     check_optional_transports(checks, parsed, args(rnode=True))
 
     assert checks.failures == 1
+
+
+def test_rpc_failure_redacts_credentials(capsys):
+    secret_url = "https://user:pass@rpc.example.test/private-token?api-key=secret"
+    checks = Checks()
+    error = requests.exceptions.ConnectionError(f"failed to reach {secret_url}")
+
+    with patch("requests.post", side_effect=error):
+        check_rpc(checks, secret_url)
+
+    output = capsys.readouterr().out
+    assert checks.failures == 1
+    assert "secret" not in output
+    assert "user:pass" not in output
+    assert "https://rpc.example.test/..." in output

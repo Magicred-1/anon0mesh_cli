@@ -9,7 +9,6 @@ PID_FILE="$STATE_DIR/headless-node.pid"
 LOG_FILE="$STATE_DIR/headless-node.log"
 CONFIG_DIR="${ANONMESH_CONFIG_DIR:-$HOME/.reticulum}"
 NETWORK="${ANONMESH_NETWORK:-devnet}"
-RPC_URL="${ANONMESH_RPC_URL:-}"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="${ANONMESH_PYTHON:-python3}"
@@ -17,10 +16,6 @@ fi
 
 node_args=(--config "$CONFIG_DIR" --network "$NETWORK")
 preflight_args=(--config "$CONFIG_DIR" --network "$NETWORK")
-if [[ -n "$RPC_URL" ]]; then
-  node_args+=(--rpc "$RPC_URL")
-  preflight_args+=(--rpc "$RPC_URL")
-fi
 
 read_pid() {
   [[ -f "$PID_FILE" ]] || return 1

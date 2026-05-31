@@ -73,6 +73,25 @@ def test_decode_json_nested():
     assert shared.decode_json(json.dumps(data).encode()) == data
 
 
+# ── redact_url ────────────────────────────────────────────────────────────────
+
+def test_redact_url_hides_query_credentials_and_path_tokens():
+    url = "https://user:pass@rpc.example.test/private-token?api-key=secret#fragment"
+    assert shared.redact_url(url) == "https://rpc.example.test/..."
+
+
+def test_redact_url_preserves_safe_host_and_port():
+    assert shared.redact_url("https://rpc.example.test:8899") == "https://rpc.example.test:8899"
+
+
+def test_redact_url_formats_ipv6_host():
+    assert shared.redact_url("http://[::1]:8899/token") == "http://[::1]:8899/..."
+
+
+def test_redact_url_rejects_non_url_values():
+    assert shared.redact_url("not-a-url") == "<redacted-rpc-url>"
+
+
 # ── quiet mode ─────────────────────────────────────────────────────────────────
 
 def test_log_info_visible_by_default(capsys):

@@ -58,3 +58,42 @@ def test_start_failure_clears_pid_file(tmp_path):
     assert result.returncode == 1
     assert "failed to start" in result.stderr
     assert not (tmp_path / "state" / "headless-node.pid").exists()
+
+
+def test_start_keeps_rpc_url_out_of_process_args(tmp_path):
+    fake_python = tmp_path / "python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "[[ \"$1\" == *preflight.py ]] && exit 0\n"
+        "while true; do sleep 1; done\n"
+    )
+    fake_python.chmod(0o755)
+    state_dir = tmp_path / "state"
+    secret_url = "https://rpc.example.test/private-token?api-key=secret"
+    env = {
+        **os.environ,
+        "ANONMESH_PYTHON": str(fake_python),
+        "ANONMESH_RPC_URL": secret_url,
+        "ANONMESH_STATE_DIR": str(state_dir),
+    }
+
+    try:
+        start = subprocess.run(
+            [str(LAUNCHER), "start"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert start.returncode == 0
+        pid = (state_dir / "headless-node.pid").read_text().strip()
+        args = subprocess.run(
+            ["ps", "-ww", "-p", pid, "-o", "args="],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert secret_url not in args
+        assert "api-key" not in args
+    finally:
+        subprocess.run([str(LAUNCHER), "stop"], check=False, env=env)

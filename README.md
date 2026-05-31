@@ -74,6 +74,7 @@ Key variables:
 | Variable | Default | Description |
 |---|---|---|
 | `SOLANA_NETWORK` | `devnet` | Launcher network: `devnet` or `mainnet` |
+| `SOLANA_RPC_URL` | public network endpoint | Optional beacon RPC override |
 | `ARCIUM_ENABLED` | `0` | Set to `1` to enable Arcium MPC |
 | `ARCIUM_PAYER_KEYPAIR` | *(unset)* | Keypair that pays Arcium computation fees |
 | `ARCIUM_RPC_URL` | devnet public endpoint | RPC for Arcium transactions |
@@ -118,6 +119,9 @@ Use the headless launcher for a laptop or Linux server that only forwards RPC:
 ```
 
 Override `ANONMESH_CONFIG_DIR`, `ANONMESH_NETWORK`, or `ANONMESH_RPC_URL` when the defaults do not match your deployment.
+Use the RPC URL environment variables for credential-bearing endpoints. The
+launchers keep those URLs out of process arguments, and runtime logs redact
+credentials, path tokens, and query parameters.
 
 ## Testing
 

@@ -19,6 +19,7 @@ import json
 import time
 import zlib
 from typing import Any
+from urllib.parse import urlsplit
 
 # ── App identity (both sides must agree) ───────────────────────────────────────
 APP_NAME      = "anonmesh"
@@ -67,6 +68,26 @@ def build_response(result: Any = None, error: str | None = None, req_id: int = 1
 def decode_json(raw: bytes) -> Any:
     """Safely decode JSON bytes."""
     return json.loads(raw.decode("utf-8"))
+
+
+def redact_url(url: str) -> str:
+    """Return a log-safe endpoint label without credentials, path tokens, or query params."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        if not parts.scheme or not host:
+            return "<redacted-rpc-url>"
+        if ":" in host:
+            host = f"[{host}]"
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        return "<redacted-rpc-url>"
+
+    suffix = "/..." if (
+        parts.username or parts.password or parts.path not in ("", "/")
+        or parts.query or parts.fragment
+    ) else ""
+    return f"{parts.scheme}://{host}{port}{suffix}"
 
 
 # ── Mesh payload compression ─────────────────────────────────────────────────
