@@ -322,6 +322,18 @@ def test_beacon_connection_error_does_not_leak_rpc_credentials(monkeypatch, caps
     assert "https://rpc.example.test/..." in output
 
 
+def test_beacon_uses_configured_ca_bundle_for_forwarding(tmp_path, monkeypatch):
+    ca_bundle = tmp_path / "private-rpc-ca.pem"
+    ca_bundle.write_text("test certificate bundle")
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(ca_bundle))
+    http_response = _http_response(b'{"result":1}')
+
+    with patch.object(beacon.requests, "post", return_value=http_response) as post:
+        assert decode_json(beacon.forward_plain_rpc({}, 1, 1, "getSlot")) == {"result": 1}
+
+    assert post.call_args.kwargs["verify"] == str(ca_bundle)
+
+
 def test_exit_node_connection_error_does_not_leak_rpc_credentials(monkeypatch, capsys):
     secret_url = "https://user:pass@rpc.example.test/private-token?api-key=secret"
     monkeypatch.setattr(exit_node, "rpc_endpoint", secret_url)

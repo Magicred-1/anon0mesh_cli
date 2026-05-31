@@ -34,16 +34,10 @@ import threading
 # ── SSL cert fix — must happen before importing requests ──────────────────────
 # If certifi's .pem is missing (broken venv), fall back to the system bundle.
 import certifi as _certifi
-if not os.path.isfile(_certifi.where()):
-    _system_certs = "/etc/ssl/certs/ca-certificates.crt"
-    if os.path.isfile(_system_certs):
-        os.environ["REQUESTS_CA_BUNDLE"] = _system_certs
-        os.environ["SSL_CERT_FILE"]      = _system_certs
-# Also respect .env override
-_env_cert = os.getenv("REQUESTS_CA_BUNDLE", "")
-if _env_cert and os.path.isfile(_env_cert):
-    os.environ["REQUESTS_CA_BUNDLE"] = _env_cert
-    os.environ["SSL_CERT_FILE"]      = _env_cert
+_SYSTEM_CERTS = "/etc/ssl/certs/ca-certificates.crt"
+if not os.path.isfile(_certifi.where()) and os.path.isfile(_SYSTEM_CERTS):
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", _SYSTEM_CERTS)
+    os.environ.setdefault("SSL_CERT_FILE", _SYSTEM_CERTS)
 
 import requests
 
@@ -340,19 +334,28 @@ def _maybe_log_arcium_stats(params: object, result_bytes: bytes, count: int) -> 
 # RPC Forwarding
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _requests_verify_bundle() -> str | bool:
+    """Choose the configured CA bundle without disabling TLS verification."""
+    override = os.getenv("REQUESTS_CA_BUNDLE") or os.getenv("SSL_CERT_FILE")
+    if override:
+        return override
+    certifi_bundle = _certifi.where()
+    if os.path.isfile(certifi_bundle):
+        return certifi_bundle
+    if os.path.isfile(_SYSTEM_CERTS):
+        return _SYSTEM_CERTS
+    return True
+
+
 def forward_plain_rpc(req: dict, req_id: int, count: int, method: str) -> bytes:
     """Forward a JSON-RPC request to the Solana HTTP endpoint and return raw bytes."""
     try:
-        # Determine SSL cert path — fall back to system bundle if certifi is broken
-        import certifi as _c
-        _cert = _c.where() if os.path.isfile(_c.where()) else "/etc/ssl/certs/ca-certificates.crt"
-
         http_resp = requests.post(
             rpc_endpoint,
             json=req,
             timeout=20,
             headers={"Content-Type": "application/json"},
-            verify=_cert,
+            verify=_requests_verify_bundle(),
             stream=True,
         )
         try:
