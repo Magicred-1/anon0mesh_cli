@@ -116,12 +116,15 @@ def redact_urls(text: str) -> str:
 _TERMINAL_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
-def terminal_safe_text(value: Any) -> str:
+def terminal_safe_text(value: Any, max_length: int = 4096) -> str:
     """Escape terminal control bytes before rendering untrusted text."""
-    return _TERMINAL_CONTROL_RE.sub(
+    text = _TERMINAL_CONTROL_RE.sub(
         lambda match: f"\\x{ord(match.group(0)):02x}",
         str(value),
     )
+    if len(text) > max_length:
+        return f"{text[:max_length]}... [truncated]"
+    return text
 
 
 def rpc_error_message(error: Any, default: str = "?") -> str:
@@ -197,6 +200,7 @@ _COMPRESS_MAGIC = b"\x00zl"
 MAX_MESH_REQUEST_BYTES = 256 * 1024
 MAX_MESH_RESPONSE_BYTES = 1024 * 1024
 MAX_RENDERED_LOG_LINES = 100
+MAX_RENDERED_TOKEN_ACCOUNTS = 100
 
 def compress_response(data: bytes) -> bytes:
     """Compress a response payload with zlib if it saves space."""

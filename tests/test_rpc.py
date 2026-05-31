@@ -244,6 +244,17 @@ def test_print_spl_tokens_rejects_out_of_range_decimals(capsys, decimals):
     assert "could not parse account" in capsys.readouterr().out
 
 
+def test_print_spl_tokens_caps_rendered_accounts(capsys):
+    account = {"account": {"data": {"parsed": {"info": {
+        "mint": "mint",
+        "tokenAmount": {"decimals": 0, "uiAmountString": "1"},
+    }}}}}
+    rpc._print_spl_tokens({"result": {"value": [account] * 101}})
+    output = capsys.readouterr().out
+    assert output.count(" mint ") == 100
+    assert "1 more accounts omitted" in output
+
+
 def test_get_token_accounts_handles_query_exception(mock_pool, capsys):
     mock_pool.call.side_effect = RuntimeError("query failed")
     rpc.get_token_accounts("owner")

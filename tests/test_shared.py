@@ -137,6 +137,10 @@ def test_terminal_safe_text_escapes_control_bytes():
     assert shared.terminal_safe_text("before\x1b[2J\nafter") == r"before\x1b[2J\x0aafter"
 
 
+def test_terminal_safe_text_truncates_long_values():
+    assert shared.terminal_safe_text("x" * 10, max_length=4) == "xxxx... [truncated]"
+
+
 # ── numeric parsing ───────────────────────────────────────────────────────────
 
 def test_positive_int_accepts_positive_value():

@@ -11,8 +11,8 @@ import concurrent.futures
 
 import state
 from shared import (
-    MAX_RENDERED_LOG_LINES, is_u64, log_info, log_ok, log_warn, log_err,
-    rpc_error_message, terminal_safe_text,
+    MAX_RENDERED_LOG_LINES, MAX_RENDERED_TOKEN_ACCOUNTS, is_u64, log_info,
+    log_ok, log_warn, log_err, rpc_error_message, terminal_safe_text,
     BOLD, CYAN, GREEN, RED, RESET, DIM,
 )
 
@@ -150,7 +150,7 @@ def _print_spl_tokens(token_resp: dict | None) -> None:
         print(f"  {DIM}No SPL token accounts{RESET}")
         return
     print(f"  {BOLD}SPL Tokens ({len(accounts)}){RESET}")
-    for acc in accounts:
+    for acc in accounts[:MAX_RENDERED_TOKEN_ACCOUNTS]:
         try:
             info     = acc["account"]["data"]["parsed"]["info"]
             token_amount = info["tokenAmount"]
@@ -168,6 +168,8 @@ def _print_spl_tokens(token_resp: dict | None) -> None:
             print(f"  {DIM}·{RESET} {terminal_safe_text(mint)}  {BOLD}{terminal_safe_text(amount)}{RESET}{symbol}")
         except (KeyError, TypeError):
             print(f"  {DIM}· (could not parse account){RESET}")
+    if len(accounts) > MAX_RENDERED_TOKEN_ACCOUNTS:
+        print(f"  {DIM}· ... {len(accounts) - MAX_RENDERED_TOKEN_ACCOUNTS} more accounts omitted{RESET}")
 
 
 def get_token_accounts(owner):
