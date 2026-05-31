@@ -12,7 +12,7 @@ import sys
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from shared import SOLANA_ENDPOINTS, redact_url
+from shared import SOLANA_ENDPOINTS, redact_url, terminal_safe_text
 
 
 class Checks:
@@ -20,14 +20,14 @@ class Checks:
         self.failures = 0
 
     def ok(self, message: str) -> None:
-        print(f"[ok]   {message}")
+        print(f"[ok]   {terminal_safe_text(message)}")
 
     def warn(self, message: str) -> None:
-        print(f"[warn] {message}")
+        print(f"[warn] {terminal_safe_text(message)}")
 
     def fail(self, message: str) -> None:
         self.failures += 1
-        print(f"[fail] {message}")
+        print(f"[fail] {terminal_safe_text(message)}")
 
 
 def config_file(config_dir: str | None) -> Path:
@@ -141,14 +141,18 @@ def check_rpc(checks: Checks, rpc_url: str) -> None:
             timeout=8,
         )
         response.raise_for_status()
-        body = response.json()
-        if body.get("result") != "ok":
-            checks.fail(f"Solana RPC returned unexpected getHealth response: {body}")
-            return
     except Exception as exc:
         checks.fail(f"Solana RPC unreachable: {display_url} ({type(exc).__name__})")
-    else:
-        checks.ok(f"Solana RPC reachable: {display_url}")
+        return
+    try:
+        body = response.json()
+    except ValueError:
+        checks.fail("Solana RPC returned invalid JSON for getHealth")
+        return
+    if not isinstance(body, Mapping) or body.get("result") != "ok":
+        checks.fail(f"Solana RPC returned unexpected getHealth response: {body}")
+        return
+    checks.ok(f"Solana RPC reachable: {display_url}")
 
 
 def parse_args() -> argparse.Namespace:

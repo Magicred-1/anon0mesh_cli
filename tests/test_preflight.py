@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from RNS.vendor.configobj import ConfigObj
 import requests
@@ -98,3 +98,18 @@ def test_rpc_failure_redacts_credentials(capsys):
     assert "secret" not in output
     assert "user:pass" not in output
     assert "https://rpc.example.test/..." in output
+
+
+def test_rpc_rejects_non_object_health_response(capsys):
+    response = MagicMock()
+    response.json.return_value = ["before\x1b[2Jafter"]
+    checks = Checks()
+
+    with patch("requests.post", return_value=response):
+        check_rpc(checks, "https://rpc.example.test")
+
+    output = capsys.readouterr().out
+    assert checks.failures == 1
+    assert "unexpected getHealth response" in output
+    assert r"\x1b[2J" in output
+    assert "\x1b[2J" not in output

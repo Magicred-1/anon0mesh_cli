@@ -62,7 +62,7 @@ from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     build_rpc, decode_json, decompress_response, compress_response,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
-    positive_int, rpc_error_message,
+    positive_int, rpc_error_message, terminal_safe_text,
     BOLD, CYAN, GREEN, YELLOW, RED, DIM, RESET,
 )
 from mesh import BeaconPool, BeaconAnnounceHandler, start_reticulum
@@ -376,7 +376,7 @@ def step_sign_nonce_transfer(
     tx_b64 = base64.b64encode(bytes(tx)).decode("utf-8")
     ms = timer.mark("Sign offline tx (durable nonce)", t0)
     log_ok(f"Signed offline: {len(tx_b64)} chars  ({ms:.0f}ms)")
-    log_info(f"{DIM}This tx never expires — relay it whenever ready{RESET}")
+    log_info("This tx never expires — relay it whenever ready")
     return tx_b64
 
 
@@ -629,8 +629,9 @@ def main():
         print(f"  Recipient: {BOLD}{recipient}{RESET}")
         print(f"  Nonce:     {BOLD}{nonce_pubkey_str}{RESET}")
         print(f"  Amount:    {BOLD}{args.lamports:,} lamports{RESET}")
-        print(f"  Signature: {BOLD}{GREEN}{relay_sig}{RESET}")
-        print(f"  Explorer:  {DIM}https://explorer.solana.com/tx/{relay_sig}?cluster=devnet{RESET}")
+        safe_sig = terminal_safe_text(relay_sig)
+        print(f"  Signature: {BOLD}{GREEN}{safe_sig}{RESET}")
+        print(f"  Explorer:  {DIM}https://explorer.solana.com/tx/{safe_sig}?cluster=devnet{RESET}")
         print()
 
     state.pool.teardown_all()
