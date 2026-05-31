@@ -75,6 +75,13 @@ def _restrict_private_keypair_permissions(path: str | Path) -> None:
         log_warn(f"Could not restrict keypair permissions for {path}: {exc}")
 
 
+def _load_private_keypair(path: str | Path) -> "Keypair":
+    """Load a local keypair after repairing legacy file permissions."""
+    _restrict_private_keypair_permissions(path)
+    with open(path) as f:
+        return Keypair.from_bytes(bytes(json.load(f)))
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Auto-detection
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -105,10 +112,8 @@ def auto_load_wallet() -> None:
 
     for path in candidates:
         try:
-            with open(path) as f:
-                kp = Keypair.from_bytes(bytes(json.load(f)))
+            kp = _load_private_keypair(path)
             pubkey = str(kp.pubkey())
-            _restrict_private_keypair_permissions(path)
             state.active_wallet = {"pubkey": pubkey, "path": str(path)}
             log_ok(f"Wallet loaded: {pubkey}  ({path})")
             return
@@ -227,9 +232,7 @@ def scan_nonce_accounts() -> list[dict]:
     result = []
     for path in sorted(Path(".").glob("nonce_*.json")):
         try:
-            with open(path) as f:
-                kp = Keypair.from_bytes(bytes(json.load(f)))
-            _restrict_private_keypair_permissions(path)
+            kp = _load_private_keypair(path)
             result.append({"path": str(path), "pubkey": str(kp.pubkey())})
         except Exception:
             continue
@@ -247,8 +250,7 @@ def offline_sign_transfer(keypair_json_path, to_address, lamports, blockhash=Non
     if not _validate_u64(lamports, "Lamports"):
         return None
     try:
-        with open(keypair_json_path) as f:
-            keypair = Keypair.from_bytes(bytes(json.load(f)))
+        keypair = _load_private_keypair(keypair_json_path)
     except Exception as exc:
         log_err(f"Failed to load keypair: {exc}")
         return None
@@ -379,8 +381,7 @@ def partial_sign_execute_payment(
         return None
 
     try:
-        with open(payer_keypair_path) as f:
-            payer = Keypair.from_bytes(bytes(json.load(f)))
+        payer = _load_private_keypair(payer_keypair_path)
     except Exception as exc:
         log_err(f"Failed to load keypair: {exc}")
         return None
@@ -612,16 +613,14 @@ def create_nonce_account(
         return None
 
     try:
-        with open(payer_keypair_path) as f:
-            payer = Keypair.from_bytes(bytes(json.load(f)))
+        payer = _load_private_keypair(payer_keypair_path)
     except Exception as exc:
         log_err(f"Failed to load payer keypair: {exc}")
         return None
 
     if nonce_keypair_path:
         try:
-            with open(nonce_keypair_path) as f:
-                nonce_kp = Keypair.from_bytes(bytes(json.load(f)))
+            nonce_kp = _load_private_keypair(nonce_keypair_path)
             log_info(f"Using existing nonce keypair: {nonce_kp.pubkey()}")
         except Exception as exc:
             log_err(f"Failed to load nonce keypair: {exc}")
@@ -730,15 +729,13 @@ def offline_sign_nonce_transfer(
         return None
 
     try:
-        with open(payer_keypair_path) as f:
-            payer = Keypair.from_bytes(bytes(json.load(f)))
+        payer = _load_private_keypair(payer_keypair_path)
     except Exception as exc:
         log_err(f"Failed to load payer keypair: {exc}")
         return None
 
     try:
-        with open(authority_keypair_path) as f:
-            authority_kp = Keypair.from_bytes(bytes(json.load(f)))
+        authority_kp = _load_private_keypair(authority_keypair_path)
     except Exception as exc:
         log_err(f"Failed to load authority keypair: {exc}")
         return None

@@ -48,6 +48,17 @@ def _arcium_accounts() -> dict[str, str]:
     }
 
 
+def test_load_private_keypair_repairs_permissions(tmp_path):
+    path = tmp_path / "legacy.json"
+    expected = _write_keypair(path)
+    path.chmod(0o666)
+
+    loaded = wallet._load_private_keypair(path)
+
+    assert loaded.pubkey() == expected.pubkey()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 # ── generate_wallet ───────────────────────────────────────────────────────────
 
 def test_generate_wallet_creates_file(tmp_path):
