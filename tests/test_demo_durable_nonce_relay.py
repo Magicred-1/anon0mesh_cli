@@ -55,6 +55,16 @@ def test_mesh_rpc_rejects_non_object_response(monkeypatch, capsys):
     assert "expected an object" in capsys.readouterr().out
 
 
+def test_step_load_keypair_handles_failure(monkeypatch, capsys):
+    def fail(_path):
+        raise OSError("refused")
+
+    monkeypatch.setattr(demo, "_load_private_keypair", fail)
+
+    assert demo.step_load_keypair("payer.json") is None
+    assert "Could not load keypair: refused" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("signature", [[], {}, "", True])
 def test_step_airdrop_rejects_non_string_signature(monkeypatch, timer, signature):
     wait = MagicMock()

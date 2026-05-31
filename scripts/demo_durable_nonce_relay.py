@@ -171,6 +171,15 @@ def step_generate_keypair(tmpdir: str) -> tuple[Keypair, str]:
     return kp, path
 
 
+def step_load_keypair(path: str) -> Keypair | None:
+    """Load a supplied demo payer keypair with a controlled error path."""
+    try:
+        return _load_private_keypair(path)
+    except Exception as exc:
+        log_err(f"Could not load keypair: {exc}")
+        return None
+
+
 def step_airdrop(address: str, lamports: int, timer: Timer) -> str | None:
     """Request devnet airdrop and wait for confirmation."""
     if not _is_u64(lamports) or lamports == 0:
@@ -538,7 +547,9 @@ def main():
         print(f"\n  {BOLD}{CYAN}━━━ Step 1: Generate Keypair ━━━{RESET}")
         t0 = time.monotonic()
         if args.keypair:
-            payer = _load_private_keypair(args.keypair)
+            payer = step_load_keypair(args.keypair)
+            if payer is None:
+                sys.exit(1)
             wallet_path = args.keypair
             log_ok(f"Loaded keypair: {payer.pubkey()}")
         else:
