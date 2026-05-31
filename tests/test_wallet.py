@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
+import beacon as beacon_module
 import state
 import wallet
 
@@ -18,6 +19,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 from solders.keypair import Keypair
+from solders.transaction import Transaction
 
 # A known valid base58 Hash string (all 1s — the default/zero hash)
 ZERO_HASH = "11111111111111111111111111111111"
@@ -416,7 +418,9 @@ def test_offline_sign_nonce_transfer_rejects_out_of_range_lamports(capsys, lampo
 @patch("wallet._account_exists", return_value=True)
 @patch("arcium_client._run_shim")
 @patch("arcium_client.rescue_encrypt")
-def test_partial_sign_execute_payment_returns_base64(mock_encrypt, mock_shim, _mock_exists, tmp_path):
+def test_partial_sign_execute_payment_returns_base64(
+    mock_encrypt, mock_shim, _mock_exists, tmp_path, monkeypatch,
+):
     payer   = _write_keypair(tmp_path / "payer.json")
     beacon  = Keypair()
     to      = Keypair()
@@ -442,6 +446,8 @@ def test_partial_sign_execute_payment_returns_base64(mock_encrypt, mock_shim, _m
     assert tx is not None
     decoded = base64.b64decode(tx)
     assert len(decoded) > 0
+    monkeypatch.setattr(beacon_module, "beacon_cosign_keypair", beacon)
+    assert beacon_module._validate_cosign_transaction(Transaction.from_bytes(decoded)) is None
 
 
 def test_partial_sign_execute_payment_missing_keypair(tmp_path, capsys):

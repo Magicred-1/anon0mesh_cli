@@ -26,6 +26,7 @@ Architecture recap (anon0mesh Proof-of-Relay):
 import sys
 import time
 import argparse
+import hashlib
 import os
 import json
 import threading
@@ -116,6 +117,14 @@ beacon_cosign_keypair   = None   # Keypair used to co-sign client Arcium txs
 request_count           = 0
 request_lock            = threading.Lock()
 
+# ── Co-sign transaction allowlist ──────────────────────────────────────────────
+_SYSTEM_PROGRAM_ID = "11111111111111111111111111111111"
+_ATA_PROGRAM_ID = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+_MXE_PROGRAM_ID = "7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks"
+_EXECUTE_PAYMENT_DISC = hashlib.sha256(b"global:execute_payment").digest()[:8]
+_ADVANCE_NONCE_DATA = b"\x04\x00\x00\x00"
+_MAX_U64 = (1 << 64) - 1
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # RPC Forwarding
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -123,6 +132,74 @@ request_lock            = threading.Lock()
 # ═══════════════════════════════════════════════════════════════════════════════
 # Arcium co-sign handlers  (getBeaconPubkey / cosignTransaction)
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _message_key_is_writable(message, index: int) -> bool:
+    header = message.header
+    if index < header.num_required_signatures:
+        return index < header.num_required_signatures - header.num_readonly_signed_accounts
+    return index < len(message.account_keys) - header.num_readonly_unsigned_accounts
+
+
+def _validate_cosign_transaction(tx) -> str | None:
+    """Return a rejection reason unless tx is the narrow execute_payment shape."""
+    try:
+        tx.sanitize()
+        message = tx.message
+        keys = list(message.account_keys)
+        signer_keys = list(message.signer_keys())
+        beacon_pubkey = beacon_cosign_keypair.pubkey()
+
+        if len(signer_keys) != 2 or signer_keys[1] != beacon_pubkey:
+            return "expected payer and beacon broadcaster signers"
+        beacon_index = keys.index(beacon_pubkey)
+        if _message_key_is_writable(message, beacon_index):
+            return "beacon broadcaster must be read-only"
+
+        signature_results = tx.verify_with_results()
+        if len(signature_results) != 2 or not signature_results[0]:
+            return "payer signature is missing or invalid"
+
+        instructions = list(message.instructions)
+        if len(instructions) < 2:
+            return "expected nonce advance and execute_payment instructions"
+
+        first = instructions[0]
+        if (
+            str(keys[first.program_id_index]) != _SYSTEM_PROGRAM_ID
+            or bytes(first.data) != _ADVANCE_NONCE_DATA
+            or beacon_index in first.accounts
+        ):
+            return "first instruction must advance a payer-authorized durable nonce"
+
+        for instruction in instructions[1:-1]:
+            accounts = list(instruction.accounts)
+            beacon_positions = [
+                index for index, account_index in enumerate(accounts)
+                if account_index == beacon_index
+            ]
+            if (
+                str(keys[instruction.program_id_index]) != _ATA_PROGRAM_ID
+                or bytes(instruction.data) != b"\x01"
+                or len(accounts) != 6
+                or beacon_positions not in ([], [2])
+            ):
+                return "only idempotent ATA creation may precede execute_payment"
+
+        final = instructions[-1]
+        final_accounts = list(final.accounts)
+        if (
+            str(keys[final.program_id_index]) != _MXE_PROGRAM_ID
+            or len(final_accounts) != 21
+            or final_accounts[1] != beacon_index
+            or final_accounts.count(beacon_index) != 1
+            or len(final.data) != 104
+            or not bytes(final.data).startswith(_EXECUTE_PAYMENT_DISC)
+        ):
+            return "final instruction must be the allowlisted execute_payment shape"
+    except Exception:
+        return "malformed transaction"
+    return None
+
 
 def _handle_get_beacon_pubkey(req_id: int) -> bytes:
     """Return the beacon's co-signing pubkey so clients can build co-sign txs."""
@@ -148,6 +225,10 @@ def _handle_cosign_transaction(params: list, req_id: int, count: int) -> bytes:
     try:
         tx_bytes = _base64.b64decode(params[0])
         tx       = _Transaction.from_bytes(tx_bytes)
+        rejection = _validate_cosign_transaction(tx)
+        if rejection:
+            log_warn(f"[#{count}] Co-sign rejected: {rejection}")
+            return build_response(error=f"Co-sign rejected: {rejection}", req_id=req_id)
         bh       = tx.message.recent_blockhash
         tx.partial_sign([beacon_cosign_keypair], bh)
         fully_signed_b64 = _base64.b64encode(bytes(tx)).decode()
@@ -171,11 +252,13 @@ def _dispatch_cosign(method: str, params: list, req_id: int, count: int) -> "byt
     return None
 
 
-def _resolve_arcium_meta(params: list) -> dict:
+def _resolve_arcium_meta(params: object) -> dict:
     """Extract arcium metadata from params and fill missing token fields from env."""
     meta = {}
-    if len(params) > 1 and isinstance(params[1], dict):
-        meta = params[1].get("arcium", {})
+    if isinstance(params, list) and len(params) > 1 and isinstance(params[1], dict):
+        candidate = params[1].get("arcium", {})
+        if isinstance(candidate, dict):
+            meta = candidate
     if not meta.get("mint"):
         meta = dict(meta, mint=os.getenv("ARCIUM_MINT", ""))
     if not meta.get("payer_ta"):
@@ -198,9 +281,27 @@ def _fire_arcium_stats(meta: dict, count: int, label: str) -> None:
         log_warn(f"[#{count}] Arcium skipped — missing: {', '.join(missing)}"
                  f"  (set ARCIUM_MINT / ARCIUM_PAYER_TOKEN_ACCOUNT in .env)")
         return
+    raw_amount = meta["amount"]
+    if isinstance(raw_amount, bool):
+        amount = None
+    elif isinstance(raw_amount, int):
+        amount = raw_amount
+    elif isinstance(raw_amount, str) and raw_amount.isdecimal():
+        amount = int(raw_amount)
+    else:
+        amount = None
+    account_fields = (
+        "mint", "payer_ta", "recipient", "recipient_ta", "broadcaster", "broadcaster_ta",
+    )
+    if amount is None or not 0 <= amount <= _MAX_U64:
+        log_warn(f"[#{count}] Arcium skipped — amount must be a u64 integer")
+        return
+    if any(key in meta and not isinstance(meta[key], str) for key in account_fields):
+        log_warn(f"[#{count}] Arcium skipped — account metadata must be strings")
+        return
     try:
         arcium.log_payment_stats(
-            amount                    = int(meta["amount"]),
+            amount                    = amount,
             payer_token_account       = meta["payer_ta"],
             recipient                 = meta.get("recipient", ""),
             recipient_token_account   = meta.get("recipient_ta", ""),
@@ -213,14 +314,14 @@ def _fire_arcium_stats(meta: dict, count: int, label: str) -> None:
         log_err(f"[#{count}] Arcium execute_payment failed: {exc}")
 
 
-def _maybe_log_arcium_stats(params: list, result_bytes: bytes, count: int) -> None:
+def _maybe_log_arcium_stats(params: object, result_bytes: bytes, count: int) -> None:
     """
     Fire-and-forget: log encrypted payment stats to the Arcium MXE after a
     successful sendTransaction.  Never raises — must not block the response.
     """
     try:
         parsed_result = decode_json(result_bytes)
-        if not ("result" in parsed_result and isinstance(parsed_result["result"], str)):
+        if not isinstance(parsed_result, dict) or not isinstance(parsed_result.get("result"), str):
             return
         _fire_arcium_stats(_resolve_arcium_meta(params), count, "fire-and-forget")
     except Exception:

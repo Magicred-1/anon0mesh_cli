@@ -1,15 +1,68 @@
 """Regression tests for untrusted mesh gateway request payloads."""
 from __future__ import annotations
 
+import base64
 import json
 import stat
 from unittest.mock import MagicMock, patch
 
 import pytest
+from solders.hash import Hash
+from solders.instruction import AccountMeta, Instruction
+from solders.keypair import Keypair
+from solders.message import Message
+from solders.pubkey import Pubkey
+from solders.system_program import (
+    advance_nonce_account, transfer, AdvanceNonceAccountParams, TransferParams,
+)
+from solders.transaction import Transaction
 
 import beacon
 from scripts import exit_node
 from shared import MAX_MESH_REQUEST_BYTES, MAX_MESH_RESPONSE_BYTES, build_rpc, decode_json
+
+
+def _execute_payment_transaction(extra_instructions=None, broadcaster=None, include_ata=False):
+    payer = Keypair()
+    broadcaster = broadcaster or Keypair()
+    nonce = Keypair().pubkey()
+    advance = advance_nonce_account(AdvanceNonceAccountParams(
+        nonce_pubkey=nonce,
+        authorized_pubkey=payer.pubkey(),
+    ))
+    ata_instructions = []
+    if include_ata:
+        ata_instructions.append(Instruction(
+            program_id=Pubkey.from_string(beacon._ATA_PROGRAM_ID),
+            accounts=[
+                AccountMeta(payer.pubkey(), True, True),
+                AccountMeta(Keypair().pubkey(), False, True),
+                AccountMeta(broadcaster.pubkey(), False, False),
+                AccountMeta(Keypair().pubkey(), False, False),
+                AccountMeta(Pubkey.from_string(beacon._SYSTEM_PROGRAM_ID), False, False),
+                AccountMeta(Keypair().pubkey(), False, False),
+            ],
+            data=b"\x01",
+        ))
+    accounts = [
+        AccountMeta(payer.pubkey(), True, True),
+        AccountMeta(broadcaster.pubkey(), True, False),
+        *[AccountMeta(Keypair().pubkey(), False, True) for _ in range(19)],
+    ]
+    execute_payment = Instruction(
+        program_id=Pubkey.from_string(beacon._MXE_PROGRAM_ID),
+        accounts=accounts,
+        data=beacon._EXECUTE_PAYMENT_DISC + b"\x00" * 96,
+    )
+    blockhash = Hash.default()
+    message = Message.new_with_blockhash(
+        [advance, *ata_instructions, *(extra_instructions or []), execute_payment],
+        payer.pubkey(),
+        blockhash,
+    )
+    tx = Transaction.new_unsigned(message)
+    tx.partial_sign([payer], blockhash)
+    return tx, broadcaster
 
 
 @pytest.mark.parametrize("payload", [[], "getBalance", 1, None])
@@ -70,6 +123,61 @@ def test_beacon_rejects_non_list_cosign_params_without_forwarding(monkeypatch):
     post.assert_not_called()
 
 
+def test_beacon_cosigns_allowlisted_execute_payment_shape(monkeypatch):
+    tx, broadcaster = _execute_payment_transaction(include_ata=True)
+    monkeypatch.setattr(beacon, "HAS_SOLDERS", True)
+    monkeypatch.setattr(beacon, "beacon_cosign_keypair", broadcaster)
+
+    with patch.object(beacon, "forward_plain_rpc", return_value=b'{"result":"sig"}') as forward:
+        response = decode_json(beacon._handle_cosign_transaction(
+            [base64.b64encode(bytes(tx)).decode()], 7, 1,
+        ))
+
+    assert response["result"] == "sig"
+    submitted_b64 = forward.call_args.args[0]["params"][0]
+    submitted = Transaction.from_bytes(base64.b64decode(submitted_b64))
+    assert submitted.verify_with_results() == [True, True]
+
+
+def test_beacon_rejects_cosign_shape_that_can_spend_broadcaster_funds(monkeypatch):
+    _, broadcaster = _execute_payment_transaction()
+    spend = transfer(TransferParams(
+        from_pubkey=broadcaster.pubkey(),
+        to_pubkey=Keypair().pubkey(),
+        lamports=1,
+    ))
+    tx, _ = _execute_payment_transaction([spend], broadcaster)
+    monkeypatch.setattr(beacon, "HAS_SOLDERS", True)
+    monkeypatch.setattr(beacon, "beacon_cosign_keypair", broadcaster)
+
+    with patch.object(beacon, "forward_plain_rpc") as forward:
+        response = decode_json(beacon._handle_cosign_transaction(
+            [base64.b64encode(bytes(tx)).decode()], 7, 1,
+        ))
+
+    assert response["error"]["message"].startswith("Co-sign rejected:")
+    forward.assert_not_called()
+
+
+def test_beacon_rejects_cosign_shape_with_unallowlisted_instruction(monkeypatch):
+    unrelated = Instruction(
+        program_id=Keypair().pubkey(),
+        accounts=[],
+        data=b"",
+    )
+    tx, broadcaster = _execute_payment_transaction([unrelated])
+    monkeypatch.setattr(beacon, "HAS_SOLDERS", True)
+    monkeypatch.setattr(beacon, "beacon_cosign_keypair", broadcaster)
+
+    with patch.object(beacon, "forward_plain_rpc") as forward:
+        response = decode_json(beacon._handle_cosign_transaction(
+            [base64.b64encode(bytes(tx)).decode()], 7, 1,
+        ))
+
+    assert response["error"]["message"].startswith("Co-sign rejected:")
+    forward.assert_not_called()
+
+
 def test_beacon_repairs_cosign_keypair_permissions(tmp_path, monkeypatch):
     path = tmp_path / "payer.json"
     path.write_text("[1, 2, 3]")
@@ -87,6 +195,66 @@ def test_beacon_repairs_cosign_keypair_permissions(tmp_path, monkeypatch):
 
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     keypair_type.from_bytes.assert_called_once_with(bytes([1, 2, 3]))
+
+
+@pytest.mark.parametrize("params", [1, ["tx", {"arcium": "not-an-object"}]])
+def test_beacon_logs_skip_for_malformed_arcium_stats_metadata(params, monkeypatch, capsys):
+    arcium = MagicMock(enabled=True)
+    monkeypatch.setattr(beacon, "arcium", arcium)
+    for variable in (
+        "ARCIUM_MINT",
+        "ARCIUM_PAYER_TOKEN_ACCOUNT",
+        "ARCIUM_RECIPIENT_TOKEN_ACCOUNT",
+        "ARCIUM_BROADCASTER_TOKEN_ACCOUNT",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+
+    beacon._maybe_log_arcium_stats(params, b'{"result":"signature"}', 1)
+
+    arcium.log_payment_stats.assert_not_called()
+    assert "Arcium skipped" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("amount", [-1, True, 1.5, str(1 << 64)])
+def test_beacon_rejects_invalid_arcium_stats_amount(amount, monkeypatch, capsys):
+    arcium = MagicMock(enabled=True)
+    monkeypatch.setattr(beacon, "arcium", arcium)
+
+    beacon._fire_arcium_stats(
+        {"amount": amount, "mint": "mint", "payer_ta": "payer-ta"},
+        1,
+        "test",
+    )
+
+    arcium.log_payment_stats.assert_not_called()
+    assert "amount must be a u64 integer" in capsys.readouterr().out
+
+
+def test_beacon_rejects_non_string_arcium_stats_account(monkeypatch, capsys):
+    arcium = MagicMock(enabled=True)
+    monkeypatch.setattr(beacon, "arcium", arcium)
+
+    beacon._fire_arcium_stats(
+        {"amount": 1, "mint": ["not", "a", "string"], "payer_ta": "payer-ta"},
+        1,
+        "test",
+    )
+
+    arcium.log_payment_stats.assert_not_called()
+    assert "account metadata must be strings" in capsys.readouterr().out
+
+
+def test_beacon_queues_valid_arcium_stats_metadata(monkeypatch):
+    arcium = MagicMock(enabled=True)
+    monkeypatch.setattr(beacon, "arcium", arcium)
+
+    beacon._fire_arcium_stats(
+        {"amount": "42", "mint": "mint", "payer_ta": "payer-ta"},
+        1,
+        "test",
+    )
+
+    assert arcium.log_payment_stats.call_args.kwargs["amount"] == 42
 
 
 def test_beacon_connection_error_does_not_leak_rpc_credentials(monkeypatch, capsys):
