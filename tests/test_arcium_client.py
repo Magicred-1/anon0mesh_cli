@@ -34,6 +34,11 @@ def _encrypt_payload() -> dict:
     }
 
 
+VALID_HEX_32 = "ab" * 32
+VALID_HEX_16 = "cd" * 16
+VALID_CIPHERTEXT = [1] * 32
+
+
 # ── _run_shim ─────────────────────────────────────────────────────────────────
 
 def test_run_shim_missing_file(tmp_path):
@@ -159,10 +164,10 @@ def test_rescue_keygen_rejects_invalid_keys(mock_shim):
 @patch("arcium_client._run_shim")
 def test_rescue_encrypt_passes_mxe_pubkey_and_values_via_stdin(mock_shim):
     mock_shim.return_value = _encrypt_payload()
-    arcium_client.rescue_encrypt("mxe_pubkey_hex", [999])
+    arcium_client.rescue_encrypt(VALID_HEX_32, [999])
     args = mock_shim.call_args[0]
     assert args[0] == "encrypt"
-    assert args[1] == "mxe_pubkey_hex"
+    assert args[1] == VALID_HEX_32
     assert len(args) == 2
     assert json.loads(mock_shim.call_args.kwargs["stdin_data"]) == [999]
 
@@ -170,18 +175,18 @@ def test_rescue_encrypt_passes_mxe_pubkey_and_values_via_stdin(mock_shim):
 @patch("arcium_client._run_shim")
 def test_rescue_encrypt_with_nonce_appends_arg(mock_shim):
     mock_shim.return_value = _encrypt_payload()
-    arcium_client.rescue_encrypt("mxe", [1], nonce_hex="aabbcc")
+    arcium_client.rescue_encrypt(VALID_HEX_32, [1], nonce_hex=VALID_HEX_16)
     args = mock_shim.call_args[0]
-    assert args == ("encrypt", "mxe", "aabbcc")
+    assert args == ("encrypt", VALID_HEX_32, VALID_HEX_16)
     assert json.loads(mock_shim.call_args.kwargs["stdin_data"]) == [1]
 
 
 @patch("arcium_client._run_shim")
 def test_rescue_encrypt_without_nonce_omits_arg(mock_shim):
     mock_shim.return_value = _encrypt_payload()
-    arcium_client.rescue_encrypt("mxe", [1])
+    arcium_client.rescue_encrypt(VALID_HEX_32, [1])
     args = mock_shim.call_args[0]
-    assert args == ("encrypt", "mxe")
+    assert args == ("encrypt", VALID_HEX_32)
     assert json.loads(mock_shim.call_args.kwargs["stdin_data"]) == [1]
 
 
@@ -199,7 +204,23 @@ def test_rescue_encrypt_rejects_invalid_payload(mock_shim, field, value):
     payload[field] = value
     mock_shim.return_value = payload
     with pytest.raises(ValueError, match="invalid payload"):
-        arcium_client.rescue_encrypt("mxe", [1])
+        arcium_client.rescue_encrypt(VALID_HEX_32, [1])
+
+
+@pytest.mark.parametrize("mxe_pubkey, values, nonce", [
+    ("bad", [1], None),
+    (VALID_HEX_32, [], None),
+    (VALID_HEX_32, [True], None),
+    (VALID_HEX_32, [-1], None),
+    (VALID_HEX_32, [1 << 256], None),
+    (VALID_HEX_32, [1] * 101, None),
+    (VALID_HEX_32, [1], "bad"),
+])
+@patch("arcium_client._run_shim")
+def test_rescue_encrypt_rejects_invalid_request_without_running_shim(mock_shim, mxe_pubkey, values, nonce):
+    with pytest.raises(ValueError, match="invalid encrypt request"):
+        arcium_client.rescue_encrypt(mxe_pubkey, values, nonce)
+    mock_shim.assert_not_called()
 
 
 # ── rescue_decrypt ────────────────────────────────────────────────────────────
@@ -207,27 +228,35 @@ def test_rescue_encrypt_rejects_invalid_payload(mock_shim, field, value):
 @patch("arcium_client._run_shim")
 def test_rescue_decrypt_passes_secret_via_stdin(mock_shim):
     mock_shim.return_value = {"ok": True, "values": ["100", "200"]}
-    arcium_client.rescue_decrypt("my_shared_secret", [[1, 2, 3]], "nonce_hex")
-    assert mock_shim.call_args[1]["stdin_data"] == "my_shared_secret"
+    arcium_client.rescue_decrypt(VALID_HEX_32, [VALID_CIPHERTEXT] * 2, VALID_HEX_16)
+    assert mock_shim.call_args[1]["stdin_data"] == VALID_HEX_32
 
 
 @patch("arcium_client._run_shim")
 def test_rescue_decrypt_returns_ints(mock_shim):
     mock_shim.return_value = {"ok": True, "values": ["42", "0", "999"]}
-    result = arcium_client.rescue_decrypt("secret", [[]], "nonce")
+    result = arcium_client.rescue_decrypt(VALID_HEX_32, [VALID_CIPHERTEXT] * 3, VALID_HEX_16)
     assert result == [42, 0, 999]
     assert all(isinstance(v, int) for v in result)
 
 
 @patch("arcium_client._run_shim")
-def test_rescue_decrypt_passes_ciphertexts_and_nonce_as_args(mock_shim):
-    mock_shim.return_value = {"ok": True, "values": []}
-    ciphertexts = [[1, 2, 3], [4, 5, 6]]
-    arcium_client.rescue_decrypt("secret", ciphertexts, "my_nonce")
+def test_rescue_decrypt_rejects_empty_ciphertexts_without_running_shim(mock_shim):
+    ciphertexts = []
+    with pytest.raises(ValueError, match="invalid decrypt request"):
+        arcium_client.rescue_decrypt(VALID_HEX_32, ciphertexts, VALID_HEX_16)
+    mock_shim.assert_not_called()
+
+
+@patch("arcium_client._run_shim")
+def test_rescue_decrypt_passes_valid_ciphertexts_and_nonce_as_args(mock_shim):
+    mock_shim.return_value = {"ok": True, "values": ["1", "2"]}
+    ciphertexts = [VALID_CIPHERTEXT, [2] * 32]
+    arcium_client.rescue_decrypt(VALID_HEX_32, ciphertexts, VALID_HEX_16)
     args = mock_shim.call_args[0]
     assert args[0] == "decrypt"
     assert json.loads(args[1]) == ciphertexts
-    assert args[2] == "my_nonce"
+    assert args[2] == VALID_HEX_16
 
 
 @pytest.mark.parametrize("values", [None, "42", [True], ["-1"], [{}], ["9" * 100_000], ["١"]])
@@ -235,7 +264,22 @@ def test_rescue_decrypt_passes_ciphertexts_and_nonce_as_args(mock_shim):
 def test_rescue_decrypt_rejects_invalid_values(mock_shim, values):
     mock_shim.return_value = {"ok": True, "values": values}
     with pytest.raises(ValueError, match="invalid values"):
-        arcium_client.rescue_decrypt("secret", [[]], "nonce")
+        arcium_client.rescue_decrypt(VALID_HEX_32, [VALID_CIPHERTEXT], VALID_HEX_16)
+
+
+@pytest.mark.parametrize("secret, ciphertexts, nonce", [
+    ("bad", [VALID_CIPHERTEXT], VALID_HEX_16),
+    (VALID_HEX_32, [], VALID_HEX_16),
+    (VALID_HEX_32, [[1] * 31], VALID_HEX_16),
+    (VALID_HEX_32, [[256] * 32], VALID_HEX_16),
+    (VALID_HEX_32, [VALID_CIPHERTEXT] * 101, VALID_HEX_16),
+    (VALID_HEX_32, [VALID_CIPHERTEXT], "bad"),
+])
+@patch("arcium_client._run_shim")
+def test_rescue_decrypt_rejects_invalid_request_without_running_shim(mock_shim, secret, ciphertexts, nonce):
+    with pytest.raises(ValueError, match="invalid decrypt request"):
+        arcium_client.rescue_decrypt(secret, ciphertexts, nonce)
+    mock_shim.assert_not_called()
 
 
 # ── rescue_shared_secret ──────────────────────────────────────────────────────
@@ -243,23 +287,23 @@ def test_rescue_decrypt_rejects_invalid_values(mock_shim, values):
 @patch("arcium_client._run_shim")
 def test_rescue_shared_secret_passes_privkey_via_stdin(mock_shim):
     mock_shim.return_value = {"ok": True, "shared_secret_hex": "de" * 32}
-    arcium_client.rescue_shared_secret("my_privkey", "mxe_pubkey")
-    assert mock_shim.call_args[1]["stdin_data"] == "my_privkey"
+    arcium_client.rescue_shared_secret(VALID_HEX_32, VALID_HEX_32)
+    assert mock_shim.call_args[1]["stdin_data"] == VALID_HEX_32
 
 
 @patch("arcium_client._run_shim")
 def test_rescue_shared_secret_passes_mxe_pubkey_as_arg(mock_shim):
     mock_shim.return_value = {"ok": True, "shared_secret_hex": "de" * 32}
-    arcium_client.rescue_shared_secret("privkey", "mxe_pubkey")
+    arcium_client.rescue_shared_secret(VALID_HEX_32, VALID_HEX_32)
     args = mock_shim.call_args[0]
     assert args[0] == "shared_secret"
-    assert args[1] == "mxe_pubkey"
+    assert args[1] == VALID_HEX_32
 
 
 @patch("arcium_client._run_shim")
 def test_rescue_shared_secret_returns_hex(mock_shim):
     mock_shim.return_value = {"ok": True, "shared_secret_hex": "ca" * 32}
-    result = arcium_client.rescue_shared_secret("priv", "pub")
+    result = arcium_client.rescue_shared_secret(VALID_HEX_32, VALID_HEX_32)
     assert result == "ca" * 32
 
 
@@ -267,7 +311,14 @@ def test_rescue_shared_secret_returns_hex(mock_shim):
 def test_rescue_shared_secret_rejects_invalid_key(mock_shim):
     mock_shim.return_value = {"ok": True, "shared_secret_hex": []}
     with pytest.raises(ValueError, match="invalid key"):
-        arcium_client.rescue_shared_secret("priv", "pub")
+        arcium_client.rescue_shared_secret(VALID_HEX_32, VALID_HEX_32)
+
+
+@patch("arcium_client._run_shim")
+def test_rescue_shared_secret_rejects_invalid_request_without_running_shim(mock_shim):
+    with pytest.raises(ValueError, match="invalid shared_secret request"):
+        arcium_client.rescue_shared_secret("bad", VALID_HEX_32)
+    mock_shim.assert_not_called()
 
 
 @patch("arcium_client._run_shim")

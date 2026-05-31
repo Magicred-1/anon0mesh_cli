@@ -69,6 +69,7 @@ SHIM_PATH              = Path(__file__).parent / "rescue_shim.mjs"
 _MAX_U32               = (1 << 32) - 1
 _MAX_U128              = (1 << 128) - 1
 _MAX_FIELD_VALUE       = (1 << 256) - 1
+_MAX_RESCUE_VALUES     = 100
 
 
 def _is_fixed_hex(value: object, byte_length: int) -> bool:
@@ -97,6 +98,18 @@ def _is_bounded_decimal(value: object, maximum: int) -> bool:
     ):
         return False
     return int(value) <= maximum
+
+
+def _is_field_value(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= _MAX_FIELD_VALUE
+
+
+def _are_ciphertexts(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and 0 < len(value) <= _MAX_RESCUE_VALUES
+        and all(_is_byte_array(ciphertext, 32) for ciphertext in value)
+    )
 
 
 # ── Shim helpers ───────────────────────────────────────────────────────────────
@@ -147,8 +160,16 @@ def rescue_keygen() -> tuple[str, str]:
 
 
 def rescue_encrypt(mxe_pubkey_hex: str, values: list[int], nonce_hex: str | None = None) -> dict:
+    if (
+        not _is_fixed_hex(mxe_pubkey_hex, 32)
+        or not isinstance(values, list)
+        or not 0 < len(values) <= _MAX_RESCUE_VALUES
+        or any(not _is_field_value(value) for value in values)
+        or (nonce_hex is not None and not _is_fixed_hex(nonce_hex, 16))
+    ):
+        raise ValueError("invalid encrypt request")
     args = ["encrypt", mxe_pubkey_hex]
-    if nonce_hex:
+    if nonce_hex is not None:
         args.append(nonce_hex)
     data = _run_shim(*args, stdin_data=json.dumps(values))
     ciphertexts = data.get("ciphertexts")
@@ -167,15 +188,27 @@ def rescue_encrypt(mxe_pubkey_hex: str, values: list[int], nonce_hex: str | None
 
 def rescue_decrypt(shared_secret_hex: str, ciphertexts: list[list[int]], nonce_hex: str) -> list[int]:
     # shared_secret_hex is sensitive — pass via stdin, not as a CLI arg
+    if (
+        not _is_fixed_hex(shared_secret_hex, 32)
+        or not _are_ciphertexts(ciphertexts)
+        or not _is_fixed_hex(nonce_hex, 16)
+    ):
+        raise ValueError("invalid decrypt request")
     data = _run_shim("decrypt", json.dumps(ciphertexts), nonce_hex, stdin_data=shared_secret_hex)
     values = data.get("values")
-    if not isinstance(values, list) or any(not _is_bounded_decimal(value, _MAX_FIELD_VALUE) for value in values):
+    if (
+        not isinstance(values, list)
+        or len(values) != len(ciphertexts)
+        or any(not _is_bounded_decimal(value, _MAX_FIELD_VALUE) for value in values)
+    ):
         raise ValueError("shim decrypt returned invalid values")
     return [int(value) for value in values]
 
 
 def rescue_shared_secret(privkey_hex: str, mxe_pubkey_hex: str) -> str:
     # privkey_hex is sensitive — pass via stdin, not as a CLI arg
+    if not _is_fixed_hex(privkey_hex, 32) or not _is_fixed_hex(mxe_pubkey_hex, 32):
+        raise ValueError("invalid shared_secret request")
     shared_secret = _run_shim("shared_secret", mxe_pubkey_hex, stdin_data=privkey_hex).get("shared_secret_hex")
     if not _is_fixed_hex(shared_secret, 32):
         raise ValueError("shim shared_secret returned an invalid key")

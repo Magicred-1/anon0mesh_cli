@@ -39,14 +39,78 @@ const MXE_PROGRAM_ID = "7xeQNUggKc2e5q6AQxsFBLBkXGg2p54kSx11zVainMks";
 
 // comp_def_offset("payment_stats")
 const COMP_DEF_NAME = "payment_stats";
+const MAX_RESCUE_VALUES = 100;
+const MAX_U64 = (1n << 64n) - 1n;
+const MAX_FIELD_VALUE = (1n << 256n) - 1n;
 
-function u8a(hex)  { return Uint8Array.from(Buffer.from(hex, "hex")); }
+function u8a(value, label = "hex value", expectedBytes = null) {
+    if (typeof value !== "string" || !/^[0-9a-fA-F]+$/.test(value) || value.length % 2 !== 0) {
+        throw new Error(`${label} must be hexadecimal bytes`);
+    }
+    const bytes = Uint8Array.from(Buffer.from(value, "hex"));
+    if (expectedBytes !== null && bytes.length !== expectedBytes) {
+        throw new Error(`${label} must be ${expectedBytes} bytes`);
+    }
+    return bytes;
+}
 function hex(u8)   { return Buffer.from(u8).toString("hex"); }
 function out(data) { console.log(JSON.stringify({ ok: true,  ...data })); }
 function redactUrls(msg) {
     return String(msg).replace(/https?:\/\/[^\s"'`]+/g, "<redacted-rpc-url>");
 }
 function fail(msg) { console.log(JSON.stringify({ ok: false, error: redactUrls(msg) })); process.exit(1); }
+
+function parseU32(value, label, fallback = "456") {
+    const text = String(value ?? fallback);
+    if (!/^\d+$/.test(text)) {
+        throw new Error(`${label} must be an unsigned 32-bit integer`);
+    }
+    const parsed = Number(text);
+    if (!Number.isSafeInteger(parsed) || parsed > 0xFFFFFFFF) {
+        throw new Error(`${label} must be an unsigned 32-bit integer`);
+    }
+    return parsed;
+}
+
+function parseUnsigned(value, label, maximum) {
+    const text = String(value);
+    if (!/^\d+$/.test(text)) {
+        throw new Error(`${label} must be an unsigned decimal integer`);
+    }
+    const parsed = BigInt(text);
+    if (parsed > maximum) {
+        throw new Error(`${label} is out of range`);
+    }
+    return parsed;
+}
+
+function fieldElements(value, label) {
+    if (!Array.isArray(value) || value.length === 0 || value.length > MAX_RESCUE_VALUES) {
+        throw new Error(`${label} must contain 1-${MAX_RESCUE_VALUES} field elements`);
+    }
+    return value.map((item, index) => {
+        if (typeof item === "number" && !Number.isSafeInteger(item)) {
+            throw new Error(`${label}[${index}] must be an exact integer`);
+        }
+        return parseUnsigned(item, `${label}[${index}]`, MAX_FIELD_VALUE);
+    });
+}
+
+function byteArrays(value, label, expectedBytes) {
+    if (!Array.isArray(value) || value.length === 0 || value.length > MAX_RESCUE_VALUES) {
+        throw new Error(`${label} must contain 1-${MAX_RESCUE_VALUES} byte arrays`);
+    }
+    return value.map((item, index) => {
+        if (
+            !Array.isArray(item)
+            || item.length !== expectedBytes
+            || item.some(byte => !Number.isInteger(byte) || byte < 0 || byte > 255)
+        ) {
+            throw new Error(`${label}[${index}] must contain ${expectedBytes} bytes`);
+        }
+        return Uint8Array.from(item);
+    });
+}
 
 function deserializeLE(bytes) {
     let result = 0n;
@@ -74,9 +138,9 @@ try {
         const [mxePubkeyHex, nonceHex] = args;
         if (!mxePubkeyHex || !valuesJson) fail("usage: encrypt <mxe_pubkey_hex> [nonce_hex]  (values_json via stdin)");
 
-        const mxePublicKey = u8a(mxePubkeyHex);
-        const plaintext    = JSON.parse(valuesJson).map(BigInt);
-        const nonce        = nonceHex ? u8a(nonceHex) : randomBytes(16);
+        const mxePublicKey = u8a(mxePubkeyHex, "MXE public key", 32);
+        const plaintext    = fieldElements(JSON.parse(valuesJson), "plaintext");
+        const nonce        = nonceHex ? u8a(nonceHex, "nonce", 16) : randomBytes(16);
 
         const privateKey   = x25519.utils.randomSecretKey();
         const publicKey    = x25519.getPublicKey(privateKey);
@@ -99,9 +163,9 @@ try {
         if (!sharedSecretHex || !ciphertextsJson || !nonceHex)
             fail("usage: decrypt <ciphertexts_json> <nonce_hex>  (shared_secret_hex via stdin)");
 
-        const sharedSecret = u8a(sharedSecretHex);
-        const ciphertexts  = JSON.parse(ciphertextsJson).map(ct => Uint8Array.from(ct));
-        const nonce        = u8a(nonceHex);
+        const sharedSecret = u8a(sharedSecretHex, "shared secret", 32);
+        const ciphertexts  = byteArrays(JSON.parse(ciphertextsJson), "ciphertexts", 32);
+        const nonce        = u8a(nonceHex, "nonce", 16);
         const cipher       = new RescueCipher(sharedSecret);
         const plaintext    = cipher.decrypt(ciphertexts, nonce);
         out({ values: plaintext.map(v => v.toString()) });
@@ -111,7 +175,10 @@ try {
         const privkeyHex = readStdin();
         const [mxePubkeyHex] = args;
         if (!privkeyHex || !mxePubkeyHex) fail("usage: shared_secret <mxe_pubkey_hex>  (privkey_hex via stdin)");
-        const sharedSecret = x25519.getSharedSecret(u8a(privkeyHex), u8a(mxePubkeyHex));
+        const sharedSecret = x25519.getSharedSecret(
+            u8a(privkeyHex, "private key", 32),
+            u8a(mxePubkeyHex, "MXE public key", 32),
+        );
         out({ shared_secret_hex: hex(sharedSecret) });
 
     } else if (cmd === "mxe_pubkey") {
@@ -138,10 +205,13 @@ try {
         const programId = programIdArg || MXE_PROGRAM_ID;
         let clusterOffset;
         try { clusterOffset = getArciumEnv().arciumClusterOffset; }
-        catch { clusterOffset = Number.parseInt(clusterOffsetStr || "456"); }
+        catch { clusterOffset = clusterOffsetStr; }
+        clusterOffset = parseU32(clusterOffset, "cluster offset");
 
         const { PublicKey } = await import("@solana/web3.js");
-        const computationOffset = new BN(computationOffsetStr || "0");
+        const computationOffset = new BN(
+            parseUnsigned(computationOffsetStr ?? "0", "computation offset", MAX_U64).toString()
+        );
         const progPubkey        = new PublicKey(programId);
         const compDefOffset     = Buffer.from(getCompDefAccOffset(COMP_DEF_NAME)).readUInt32LE();
         const [signPdaPubkey]   = PublicKey.findProgramAddressSync(
@@ -213,20 +283,22 @@ try {
 
         const programId  = progIdArg || MXE_PROGRAM_ID;
         const connection = new Connection(rpcUrl || "https://api.devnet.solana.com", "confirmed");
-        const payerKp    = Keypair.fromSecretKey(u8a(payerKeypairHex));
+        const payerKp    = Keypair.fromSecretKey(u8a(payerKeypairHex, "payer keypair", 64));
         const progPubkey = new PublicKey(programId);
         let clusterOffset;
         try { clusterOffset = getArciumEnv().arciumClusterOffset; }
-        catch { clusterOffset = Number.parseInt(clusterOffStr || "456"); }
+        catch { clusterOffset = clusterOffStr; }
+        clusterOffset = parseU32(clusterOffset, "cluster offset");
 
         // Encrypt amount with x25519 + RescueCipher (client-side, using MXE pubkey)
-        const mxePublicKey  = u8a(mxePubkeyHex);
+        const mxePublicKey  = u8a(mxePubkeyHex, "MXE public key", 32);
         const clientPrivKey = x25519.utils.randomSecretKey();
         const clientPubKey  = x25519.getPublicKey(clientPrivKey);
         const sharedSecret  = x25519.getSharedSecret(clientPrivKey, mxePublicKey);
         const rescueCipher  = new RescueCipher(sharedSecret);
         const encNonce      = randomBytes(16);
-        const ciphertexts   = rescueCipher.encrypt([BigInt(amount)], encNonce);
+        const amountBig     = parseUnsigned(amount, "amount", MAX_U64);
+        const ciphertexts   = rescueCipher.encrypt([amountBig], encNonce);
         const encryptedAmountBuf = Buffer.from(ciphertexts[0]);           // 32-byte field element
         const nonceBig      = deserializeLE(Buffer.from(encNonce));       // u128 as BigInt
 
@@ -258,7 +330,7 @@ try {
         const ix_data = Buffer.alloc(8 + 8 + 8 + 32 + 16 + 32);
         disc("execute_payment").copy(ix_data, 0);
         ix_data.writeBigUInt64LE(BigInt(compOffsetBN.toString()), 8);
-        ix_data.writeBigUInt64LE(BigInt(amount), 16);
+        ix_data.writeBigUInt64LE(amountBig, 16);
         encryptedAmountBuf.copy(ix_data, 24);                             // 32-byte ciphertext
         // nonce as u128 LE at offset 56 (two u64s)
         ix_data.writeBigUInt64LE(nonceBig & 0xFFFFFFFFFFFFFFFFn, 56);
@@ -320,7 +392,9 @@ try {
 
         const signers = [payerKp];
         if (broadcasterKeypairHex) {
-            const broadcasterKp = Keypair.fromSecretKey(u8a(broadcasterKeypairHex));
+            const broadcasterKp = Keypair.fromSecretKey(
+                u8a(broadcasterKeypairHex, "broadcaster keypair", 64)
+            );
             // Only add if different pubkey — beacon uses same keypair for payer + broadcaster
             if (broadcasterKp.publicKey.toBase58() !== payerKp.publicKey.toBase58()) {
                 signers.push(broadcasterKp);

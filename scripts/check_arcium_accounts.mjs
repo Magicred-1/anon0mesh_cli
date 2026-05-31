@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const envPath = join(__dir, "..", ".env");
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 try {
     chmodSync(envPath, 0o600);
@@ -20,7 +21,11 @@ try {
         const t = line.trim();
         if (!t || t.startsWith("#") || !t.includes("=")) continue;
         const [k, ...rest] = t.split("=");
-        if (!process.env[k.trim()]) process.env[k.trim()] = rest.join("=").trim();
+        const name = k.trim();
+        const value = rest.join("=").trim();
+        if (ENV_NAME.test(name) && !value.includes("\0") && !process.env[name]) {
+            process.env[name] = value;
+        }
     }
 } catch (err) {
     if (err?.code !== "ENOENT") throw err;

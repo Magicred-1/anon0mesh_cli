@@ -24,8 +24,12 @@ const mxeAccount = arcium.getMXEAccAddress(PROGRAM_ID);
 const compDefOffsetBuf = arcium.getCompDefAccOffset("payment_stats");
 const compDefOffset = Buffer.from(compDefOffsetBuf).readUInt32LE(0);
 const compDefAccount = arcium.getCompDefAccAddress(PROGRAM_ID, compDefOffset);
-const clusterOffsetRaw = Number.parseInt(process.env.ARCIUM_CLUSTER_OFFSET ?? "456", 10);
-const clusterOffset = Number.isNaN(clusterOffsetRaw) ? 456 : clusterOffsetRaw;
+const clusterOffsetText = process.env.ARCIUM_CLUSTER_OFFSET ?? "456";
+if (!/^\d+$/.test(clusterOffsetText) || Number(clusterOffsetText) > 0xFFFFFFFF) {
+  console.error("ARCIUM_CLUSTER_OFFSET must be an unsigned 32-bit integer");
+  process.exit(1);
+}
+const clusterOffset = Number(clusterOffsetText);
 const mempoolAccount = arcium.getMempoolAccAddress(clusterOffset);
 const executingPool = arcium.getExecutingPoolAccAddress(clusterOffset);
 const clusterAccount = arcium.getClusterAccAddress(clusterOffset);
