@@ -40,6 +40,15 @@ except ImportError:
 # Fixed size of a nonce account on Solana (defined by the runtime)
 NONCE_ACCOUNT_LENGTH = 80
 _ERR_NONCE = "Could not fetch nonce account"
+_MAX_U64 = (1 << 64) - 1
+
+
+def _validate_u64(value: int, label: str) -> bool:
+    """Return whether a value can be encoded as an unsigned Solana u64."""
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= _MAX_U64:
+        log_err(f"{label} must be an integer between 0 and {_MAX_U64}")
+        return False
+    return True
 
 
 def _save_private_keypair(path: str, keypair: "Keypair") -> None:
@@ -235,6 +244,8 @@ def offline_sign_transfer(keypair_json_path, to_address, lamports, blockhash=Non
     if not HAS_SOLDERS:
         log_err("Offline signing requires: pip install solders")
         return None
+    if not _validate_u64(lamports, "Lamports"):
+        return None
     try:
         with open(keypair_json_path) as f:
             keypair = Keypair.from_bytes(bytes(json.load(f)))
@@ -357,6 +368,8 @@ def partial_sign_execute_payment(
     """
     if not HAS_SOLDERS:
         log_err("Requires: pip install solders")
+        return None
+    if not _validate_u64(amount, "Amount"):
         return None
 
     try:
@@ -640,7 +653,7 @@ def create_nonce_account(
     if "error" in resp:
         log_err(f"RPC error: {resp['error']}"); return None
     rent_lamports = _extract_result(resp)
-    if isinstance(rent_lamports, bool) or not isinstance(rent_lamports, int):
+    if not _validate_u64(rent_lamports, "Rent lamports"):
         log_err(f"Unexpected getMinimumBalanceForRentExemption response: {rent_lamports}")
         return None
     log_info(f"Rent-exempt minimum: {rent_lamports:,} lamports ({rent_lamports / 1e9:.9f} SOL)")
@@ -712,6 +725,8 @@ def offline_sign_nonce_transfer(
     """
     if not HAS_SOLDERS:
         log_err("Offline signing requires: pip install solders")
+        return None
+    if not _validate_u64(lamports, "Lamports"):
         return None
 
     try:

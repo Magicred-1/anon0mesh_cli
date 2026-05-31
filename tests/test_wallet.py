@@ -295,6 +295,13 @@ def test_offline_sign_transfer_invalid_blockhash(tmp_path, capsys):
     assert "Invalid blockhash" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("lamports", [-1, 1 << 64])
+def test_offline_sign_transfer_rejects_out_of_range_lamports(capsys, lamports):
+    result = wallet.offline_sign_transfer("unused.json", str(Keypair().pubkey()), lamports, ZERO_HASH)
+    assert result is None
+    assert "Lamports must be an integer between" in capsys.readouterr().out
+
+
 # ── offline_sign_nonce_transfer ───────────────────────────────────────────────
 
 def test_offline_sign_nonce_transfer_returns_base64(tmp_path):
@@ -390,6 +397,20 @@ def test_offline_sign_nonce_transfer_invalid_nonce_value(tmp_path, capsys):
     assert "Invalid nonce value" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("lamports", [-1, 1 << 64])
+def test_offline_sign_nonce_transfer_rejects_out_of_range_lamports(capsys, lamports):
+    result = wallet.offline_sign_nonce_transfer(
+        "unused-payer.json",
+        str(Keypair().pubkey()),
+        "unused-auth.json",
+        str(Keypair().pubkey()),
+        lamports,
+        ZERO_HASH,
+    )
+    assert result is None
+    assert "Lamports must be an integer between" in capsys.readouterr().out
+
+
 # ── partial_sign_execute_payment ──────────────────────────────────────────────
 
 @patch("wallet._account_exists", return_value=True)
@@ -466,6 +487,21 @@ def test_partial_sign_execute_payment_invalid_broadcaster_token_account(tmp_path
     )
     assert result is None
     assert "Invalid address" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("amount", [-1, 1 << 64])
+def test_partial_sign_execute_payment_rejects_out_of_range_amount(capsys, amount):
+    result = wallet.partial_sign_execute_payment(
+        "unused.json",
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        amount,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+    )
+    assert result is None
+    assert "Amount must be an integer between" in capsys.readouterr().out
 
 
 @patch("wallet._account_exists", return_value=True)
