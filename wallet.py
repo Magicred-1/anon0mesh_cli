@@ -395,10 +395,25 @@ def partial_sign_execute_payment(
     except Exception as exc:
         log_err(f"Arcium encrypt failed: {exc}")
         return None
-    pub_key_hex      = enc["pubkey_hex"]
-    nonce_bn         = int(enc["nonce_bn"])
-    # Rescue ciphertext for the amount — 32-byte field element passed to Arcium
-    encrypted_amount = bytes(enc["ciphertexts"][0])
+    try:
+        pub_key_hex = enc["pubkey_hex"]
+        nonce_bn = int(enc["nonce_bn"])
+        # Rescue ciphertext for the amount — 32-byte field element passed to Arcium
+        encrypted_amount = bytes(enc["ciphertexts"][0])
+        # Instruction data layout (fixed contract):
+        # [disc 8B][comp_offset 8B LE][amount 8B LE][encrypted_amount 32B][nonce 16B LE][pub_key 32B] = 104 bytes
+        disc = hashlib.sha256(b"global:execute_payment").digest()[:8]
+        ix_data = (
+            disc
+            + comp_offset.to_bytes(8, "little")
+            + amount.to_bytes(8, "little")
+            + encrypted_amount
+            + nonce_bn.to_bytes(16, "little")
+            + bytes.fromhex(pub_key_hex)
+        )
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        log_err(f"Invalid Arcium encryption payload: {exc}")
+        return None
 
     log_info("Fetching Arcium PDAs...")
     try:
@@ -419,30 +434,22 @@ def partial_sign_execute_payment(
         [b"whitelist", bytes(mint_pubkey)], prog_pubkey
     )
 
-    # Instruction data layout (fixed contract):
-    # [disc 8B][comp_offset 8B LE][amount 8B LE][encrypted_amount 32B][nonce 16B LE][pub_key 32B] = 104 bytes
-    disc      = hashlib.sha256(b"global:execute_payment").digest()[:8]
-    ix_data   = (
-        disc
-        + comp_offset.to_bytes(8,  "little")
-        + amount.to_bytes(8,       "little")
-        + encrypted_amount                      # 32-byte Rescue ciphertext of amount
-        + nonce_bn.to_bytes(16,    "little")
-        + bytes.fromhex(pub_key_hex)
-    )
-
-    TOKEN_PROG          = Pubkey.from_string(_TOKEN_PROGRAM)
-    SYSTEM_PROG         = Pubkey.from_string(_SYSTEM_PROGRAM)
-    # arcium_program is hardcoded in the IDL — use the value from there, not the shim
-    ARCIUM_PROG         = Pubkey.from_string("Arcj82pX7HxYKLR92qvgZUAd7vGS1k4hQvAFcPATFdEQ")
-    MXE_ACCOUNT         = Pubkey.from_string(accs["mxeAccount"])
-    COMP_DEF_ACCOUNT    = Pubkey.from_string(accs["compDefAccount"])
-    MEMPOOL_ACCOUNT     = Pubkey.from_string(accs["mempoolAccount"])
-    EXECUTING_POOL      = Pubkey.from_string(accs["executingPool"])
-    COMPUTATION_ACCOUNT = Pubkey.from_string(accs["computationAccount"])
-    CLUSTER_ACCOUNT     = Pubkey.from_string(accs["clusterAccount"])
-    POOL_ACCOUNT        = Pubkey.from_string(accs["poolAccount"])
-    CLOCK_ACCOUNT       = Pubkey.from_string(accs["clockAccount"])
+    try:
+        TOKEN_PROG = Pubkey.from_string(_TOKEN_PROGRAM)
+        SYSTEM_PROG = Pubkey.from_string(_SYSTEM_PROGRAM)
+        # arcium_program is hardcoded in the IDL — use the value from there, not the shim
+        ARCIUM_PROG = Pubkey.from_string("Arcj82pX7HxYKLR92qvgZUAd7vGS1k4hQvAFcPATFdEQ")
+        MXE_ACCOUNT = Pubkey.from_string(accs["mxeAccount"])
+        COMP_DEF_ACCOUNT = Pubkey.from_string(accs["compDefAccount"])
+        MEMPOOL_ACCOUNT = Pubkey.from_string(accs["mempoolAccount"])
+        EXECUTING_POOL = Pubkey.from_string(accs["executingPool"])
+        COMPUTATION_ACCOUNT = Pubkey.from_string(accs["computationAccount"])
+        CLUSTER_ACCOUNT = Pubkey.from_string(accs["clusterAccount"])
+        POOL_ACCOUNT = Pubkey.from_string(accs["poolAccount"])
+        CLOCK_ACCOUNT = Pubkey.from_string(accs["clockAccount"])
+    except (KeyError, TypeError, ValueError) as exc:
+        log_err(f"Invalid Arcium account metadata: {exc}")
+        return None
 
     setup_ixs: list[Instruction] = []
 

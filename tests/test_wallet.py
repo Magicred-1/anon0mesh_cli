@@ -484,6 +484,48 @@ def test_partial_sign_execute_payment_invalid_nonce_value(mock_encrypt, mock_shi
     assert "Invalid nonce value" in capsys.readouterr().out
 
 
+@patch("arcium_client._run_shim")
+@patch("arcium_client.rescue_encrypt")
+def test_partial_sign_execute_payment_invalid_encryption_payload(mock_encrypt, mock_shim, tmp_path, capsys):
+    mock_encrypt.return_value = {}
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.partial_sign_execute_payment(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        1_000,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+    )
+    assert result is None
+    assert "Invalid Arcium encryption payload" in capsys.readouterr().out
+    mock_shim.assert_not_called()
+
+
+@patch("arcium_client._run_shim")
+@patch("arcium_client.rescue_encrypt")
+def test_partial_sign_execute_payment_invalid_account_metadata(mock_encrypt, mock_shim, tmp_path, capsys):
+    mock_encrypt.return_value = {
+        "ciphertexts": [[0] * 32],
+        "pubkey_hex": "00" * 32,
+        "nonce_bn": "0",
+    }
+    mock_shim.return_value = {"mxeAccount": "not-a-valid-pubkey"}
+    _write_keypair(tmp_path / "payer.json")
+    result = wallet.partial_sign_execute_payment(
+        str(tmp_path / "payer.json"),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        str(Keypair().pubkey()),
+        1_000,
+        MXE_PUBKEY_HEX,
+        str(Keypair().pubkey()),
+    )
+    assert result is None
+    assert "Invalid Arcium account metadata" in capsys.readouterr().out
+
+
 # ── create_nonce_account (instruction build) ──────────────────────────────────
 
 def test_create_nonce_account_authority_param_name(tmp_path):
