@@ -559,17 +559,13 @@ if [[ \$# -eq 0 ]]; then
   exec python "\$SCRIPT_DIR/client.py" --discover --strategy race
 fi
 
-# ── One or more hashes passed → use them + discover ───────────────────────
+# ── Leading bare hashes → explicit beacons; preserve all option values ────
 HASHES=()
-EXTRA_ARGS=()
-for arg in "\$@"; do
-  # If it looks like a hex hash (16+ hex chars), treat as beacon hash
-  if [[ "\$arg" =~ ^[0-9a-fA-F]{16,}$ ]]; then
-    HASHES+=("\$arg")
-  else
-    EXTRA_ARGS+=("\$arg")
-  fi
+while [[ \$# -gt 0 && "\$1" =~ ^[0-9a-fA-F]{16,}$ ]]; do
+  HASHES+=("\$1")
+  shift
 done
+EXTRA_ARGS=("\$@")
 
 CMD=(python "\$SCRIPT_DIR/client.py")
 [[ \${#HASHES[@]} -gt 0 ]] && CMD+=(--beacon "\${HASHES[@]}")
