@@ -80,6 +80,21 @@ def test_decode_json_nested():
     assert shared.decode_json(json.dumps(data).encode()) == data
 
 
+@pytest.mark.parametrize("response", [
+    b"not-json",
+    b"[]",
+    b"{}",
+    b'{"result": 1, "error": "bad"}',
+])
+def test_decode_rpc_response_rejects_malformed_response(response):
+    with pytest.raises((json.JSONDecodeError, ValueError)):
+        shared.decode_rpc_response(response)
+
+
+def test_decode_rpc_response_accepts_single_result():
+    assert shared.decode_rpc_response(b'{"result": 42}') == {"result": 42}
+
+
 # ── redact_url ────────────────────────────────────────────────────────────────
 
 def test_redact_url_hides_query_credentials_and_path_tokens():

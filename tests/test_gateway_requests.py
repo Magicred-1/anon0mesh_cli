@@ -313,6 +313,39 @@ def test_exit_node_logs_scalar_rpc_error_without_traceback(capsys):
     assert "error: busy" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("body", [
+    b"not-json",
+    b"[]",
+    b"{}",
+    b'{"result":1,"error":"bad"}',
+])
+def test_beacon_rejects_malformed_solana_response(body):
+    http_response = MagicMock()
+    http_response.content = body
+
+    with patch.object(beacon.requests, "post", return_value=http_response):
+        response = decode_json(beacon.forward_plain_rpc({}, 1, 1, "getSlot"))
+
+    assert response["error"]["message"] == "Solana RPC returned invalid JSON-RPC response"
+
+
+@pytest.mark.parametrize("body", [
+    b"not-json",
+    b"[]",
+    b"{}",
+    b'{"result":1,"error":"bad"}',
+])
+def test_exit_node_rejects_malformed_solana_response(body):
+    http_response = MagicMock()
+    http_response.content = body
+
+    with patch.object(exit_node.requests, "post", return_value=http_response):
+        response, method, _ = exit_node.forward_rpc(build_rpc("getSlot"))
+
+    assert decode_json(response)["error"]["message"] == "Solana RPC returned invalid JSON-RPC response"
+    assert method == "getSlot"
+
+
 def test_beacon_rejects_oversized_solana_response():
     http_response = MagicMock()
     http_response.content = b"x" * (MAX_MESH_RESPONSE_BYTES + 1)

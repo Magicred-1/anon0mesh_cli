@@ -72,6 +72,17 @@ def decode_json(raw: bytes) -> Any:
     return json.loads(raw.decode("utf-8"))
 
 
+def decode_rpc_response(raw: bytes) -> dict:
+    """Decode a JSON-RPC response object containing exactly one outcome."""
+    parsed = decode_json(raw)
+    if (
+        not isinstance(parsed, dict)
+        or ("result" in parsed) == ("error" in parsed)
+    ):
+        raise ValueError("expected JSON-RPC response object with one outcome")
+    return parsed
+
+
 def redact_url(url: str) -> str:
     """Return a log-safe endpoint label without credentials, path tokens, or query params."""
     try:

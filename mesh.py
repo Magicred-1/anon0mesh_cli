@@ -36,7 +36,7 @@ RNS.Transport.synthesize_tunnel = staticmethod(_safe_st)
 import state
 from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
-    RNS_REQUEST_TIMEOUT, build_rpc, decode_json, decompress_response,
+    RNS_REQUEST_TIMEOUT, build_rpc, decode_rpc_response, decompress_response,
     restrict_private_file_permissions, terminal_safe_text,
     log_info, log_ok, log_warn, log_err,
     BOLD, GREEN, RED, RESET, DIM,
@@ -239,11 +239,10 @@ class BeaconLink:
             if receipt.response is not None and result_holder[0] is None:
                 try:
                     raw = decompress_response(bytes(receipt.response))
-                    parsed = decode_json(raw)
-                    if isinstance(parsed, dict) and ("result" in parsed or "error" in parsed):
-                        result_holder[0] = parsed
-                        result_holder[1] = self.label
-                        result_event.set()
+                    parsed = decode_rpc_response(raw)
+                    result_holder[0] = parsed
+                    result_holder[1] = self.label
+                    result_event.set()
                 except Exception:
                     pass
 

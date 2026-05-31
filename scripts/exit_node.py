@@ -39,7 +39,7 @@ except ImportError:
 from shared import (
     APP_NAME, APP_ASPECT, RPC_PATH, ANNOUNCE_DATA,
     SOLANA_ENDPOINTS, RNS_REQUEST_TIMEOUT, MAX_MESH_REQUEST_BYTES, MAX_MESH_RESPONSE_BYTES,
-    decode_json, build_response, compress_response, redact_url, rpc_error_message,
+    decode_json, decode_rpc_response, build_response, compress_response, redact_url, rpc_error_message,
     positive_int, restrict_private_file_permissions, save_private_identity,
     banner, log_info, log_ok, log_warn, log_err, log_tx,
     BOLD, CYAN, GREEN, RESET, DIM,
@@ -122,16 +122,20 @@ def forward_rpc(raw_request: bytes) -> tuple[bytes, str, float]:
             )
         rtt_ms = (time.monotonic() - t0) * 1000
 
-        # Log result summary
         try:
-            parsed = http_resp.json()
-            if "result" in parsed:
-                log_ok(f"[#{count}] ← {method}  {len(result_bytes)}B  {rtt_ms:.0f}ms")
-            elif "error" in parsed:
-                err_msg = rpc_error_message(parsed["error"])
-                log_warn(f"[#{count}] ← {method}  error: {err_msg}  {rtt_ms:.0f}ms")
-        except Exception:
+            parsed = decode_rpc_response(result_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            log_err(f"[#{count}] ← {method}  invalid JSON-RPC response  {rtt_ms:.0f}ms")
+            return (
+                build_response(error="Solana RPC returned invalid JSON-RPC response", req_id=req_id),
+                method,
+                rtt_ms,
+            )
+        if "result" in parsed:
             log_ok(f"[#{count}] ← {method}  {len(result_bytes)}B  {rtt_ms:.0f}ms")
+        else:
+            err_msg = rpc_error_message(parsed["error"])
+            log_warn(f"[#{count}] ← {method}  error: {err_msg}  {rtt_ms:.0f}ms")
 
         return result_bytes, method, rtt_ms
 
