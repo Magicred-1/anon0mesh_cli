@@ -394,6 +394,22 @@ class TestBeaconLinkRequest:
         assert not event.is_set()
         assert result_holder[0] is None
 
+    @pytest.mark.parametrize("payload", ["result", ["result"]])
+    def test_request_response_ignores_non_object_rpc_shape(self, payload):
+        bl = BeaconLink(VALID_HASH_HEX)
+        mock_link = _make_established_link(bl)
+        result_holder = [None, None]
+        event = threading.Event()
+        bl.request(b"payload", event, result_holder, 5.0)
+
+        on_response = mock_link.request.call_args.kwargs["response_callback"]
+        receipt = MagicMock()
+        receipt.response = json.dumps(payload).encode()
+        on_response(receipt)
+
+        assert not event.is_set()
+        assert result_holder[0] is None
+
     def test_request_response_ignores_none_response(self):
         bl = BeaconLink(VALID_HASH_HEX)
         mock_link = _make_established_link(bl)

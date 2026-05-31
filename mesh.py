@@ -224,7 +224,7 @@ class BeaconLink:
                 try:
                     raw = decompress_response(bytes(receipt.response))
                     parsed = decode_json(raw)
-                    if "result" in parsed or "error" in parsed:
+                    if isinstance(parsed, dict) and ("result" in parsed or "error" in parsed):
                         result_holder[0] = parsed
                         result_holder[1] = self.label
                         result_event.set()
